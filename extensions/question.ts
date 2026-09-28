@@ -6,6 +6,7 @@
  * Multiple questions per call are not batched; ask sequentially.
  */
 
+import { randomUUID } from 'node:crypto'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import type { ExtensionAPI, ExtensionContext, Theme } from '@earendil-works/pi-coding-agent'
@@ -62,6 +63,26 @@ export interface QuestionSpec {
   header?: string
   options: DisplayOption[]
   multiSelect?: boolean
+}
+
+/** In-process, question-owned offer; arbitrary custom TUI components are not sent. */
+export const REMOTE_QUESTION_CHANNEL = 'pi-code:question:v1'
+export type RemoteQuestionOutcome = { action: 'answer'; indices: number[] } | { action: 'text'; text: string } | { action: 'cancel' } | { action: 'pass' }
+
+export interface RemoteQuestionOffer {
+  version: 1
+  requestId: string
+  sessionId: string
+  question: string
+  header?: string
+  options: OptionWithDesc[]
+  multiSelect: boolean
+  allowFreeText: boolean
+  signal: AbortSignal
+  /** Must be called during event emission; only one listener receives a settle handle. */
+  claim: () => ((outcome: RemoteQuestionOutcome) => boolean) | undefined
+  /** The claimed responder reports input activity to reset a configured idle timer. */
+  touch: () => boolean
 }
 
 /** Normalize either accepted shape into the list of questions to ask. */
@@ -194,19 +215,19 @@ export default function question(pi: ExtensionAPI) {
     // parallel leave the first unanswerable and the run unable to finish.
     executionMode: 'sequential',
 
-    async execute(_toolCallId, rawParams, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, rawParams, signal, _onUpdate, ctx) {
       const specs = questionList(rawParams as Partial<QuestionSpec> & { questions?: QuestionSpec[] })
       if (specs.length === 0) {
         return { content: [{ type: 'text', text: 'Error: No question provided' }], details: { question: '', options: [], answer: null } as QuestionDetails }
       }
-      if (specs.length === 1) return await askOne(specs[0], ctx)
+      if (specs.length === 1) return await askOne(specs[0], ctx, pi.events, signal)
 
       // Several questions are asked in sequence; a cancel ends the run, since the
       // remaining answers would be guesses about a flow the user just declined.
       const texts: string[] = []
       const collected: QuestionDetails[] = []
       for (const spec of specs) {
-        const result = await askOne(spec, ctx)
+        const result = await askOne(spec, ctx, pi.events, signal)
         const detail = result.details as QuestionDetails
         collected.push(detail)
         texts.push(`${spec.question}\n${result.content[0].text}`)
@@ -258,7 +279,112 @@ export default function question(pi: ExtensionAPI) {
   })
 }
 
-async function askOne(params: QuestionSpec, ctx: ExtensionContext): Promise<{ content: Array<{ type: 'text'; text: string }>; details: QuestionDetails }> {
+type QuestionAnswer = Awaited<ReturnType<typeof askViaOverlay>>
+type RemoteResolution = { kind: 'result'; value: QuestionAnswer } | { kind: 'pass' }
+
+/** An unclaimed offer never inserts an async gap before the local overlay opens. */
+function offerRemoteQuestion(params: QuestionSpec, ctx: ExtensionContext, events: ExtensionAPI['events'] | undefined, signal: AbortSignal | undefined, timeoutMs: number | undefined): Promise<RemoteResolution> | undefined {
+  if (!events) return undefined
+  if (signal?.aborted) return Promise.resolve({ kind: 'result', value: null })
+
+  const sessionId = ctx.sessionManager.getSessionId()
+  const multiSelect = params.multiSelect === true
+  const controller = new AbortController()
+  let accepting = true
+  let claimed = false
+  let settled = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let complete!: (resolution: RemoteResolution) => void
+  const pending = new Promise<RemoteResolution>((resolve) => {
+    complete = resolve
+  })
+  const finish = (resolution: RemoteResolution): void => {
+    if (settled) return
+    settled = true
+    complete(resolution)
+  }
+  const abort = () => finish({ kind: 'result', value: null })
+  signal?.addEventListener('abort', abort, { once: true })
+  const scheduleTimeout = (): void => {
+    if (timer !== undefined) clearTimeout(timer)
+    // With no configured timeout this is a fixed ceiling, not a silent setting.
+    timer = setTimeout(() => finish(timeoutMs === undefined ? { kind: 'pass' } : { kind: 'result', value: { answer: '', wasCustom: false, timedOut: true } }), timeoutMs ?? 300_000)
+  }
+
+  const offer: RemoteQuestionOffer = {
+    version: 1,
+    requestId: randomUUID(),
+    sessionId,
+    question: params.question,
+    header: shortHeader(params.header),
+    options: params.options.map(({ label, description }) => ({ label, ...(description === undefined ? {} : { description }) })),
+    multiSelect,
+    allowFreeText: !multiSelect,
+    signal: controller.signal,
+    claim: () => {
+      if (!accepting || claimed || settled || controller.signal.aborted) return undefined
+      claimed = true
+      return (outcome) => {
+        if (settled || controller.signal.aborted) return false
+        if (outcome === null || typeof outcome !== 'object') {
+          finish({ kind: 'pass' })
+          return false
+        }
+        if (ctx.sessionManager.getSessionId() !== sessionId) {
+          finish({ kind: 'result', value: null })
+          return false
+        }
+        if (outcome.action === 'pass') {
+          finish({ kind: 'pass' })
+          return true
+        }
+        if (outcome.action === 'cancel') {
+          finish({ kind: 'result', value: null })
+          return true
+        }
+        if (outcome.action === 'text' && !multiSelect && typeof outcome.text === 'string' && outcome.text.trim()) {
+          finish({ kind: 'result', value: { answer: outcome.text.trim(), wasCustom: true } })
+          return true
+        }
+        if (outcome.action === 'answer' && Array.isArray(outcome.indices) && (multiSelect || outcome.indices.length === 1) && new Set(outcome.indices).size === outcome.indices.length && outcome.indices.every((index) => Number.isInteger(index) && index >= 1 && index <= params.options.length)) {
+          const checked = params.options.map((_, index) => outcome.indices.includes(index + 1))
+          finish({ kind: 'result', value: { answer: selectedLabels(params.options, checked), wasCustom: false, ...(multiSelect ? {} : { index: outcome.indices[0] }) } })
+          return true
+        }
+        // Invalid remote data must not turn into a user answer or strand the tool.
+        finish({ kind: 'pass' })
+        return false
+      }
+    },
+    touch: () => {
+      if (!claimed || settled || controller.signal.aborted || timeoutMs === undefined) return false
+      if (!accepting) scheduleTimeout()
+      return true
+    },
+  }
+
+  try {
+    events.emit(REMOTE_QUESTION_CHANNEL, offer)
+  } catch {
+    finish({ kind: 'pass' })
+  }
+  accepting = false
+  if (!claimed) {
+    signal?.removeEventListener('abort', abort)
+    controller.abort()
+    // An abort or emitter failure during emission has already resolved pending.
+    // It must not reopen the overlay in an aborted session.
+    return settled ? pending : undefined
+  }
+  if (!settled) scheduleTimeout()
+  return pending.finally(() => {
+    if (timer !== undefined) clearTimeout(timer)
+    signal?.removeEventListener('abort', abort)
+    controller.abort()
+  })
+}
+
+async function askOne(params: QuestionSpec, ctx: ExtensionContext, events?: ExtensionAPI['events'], signal?: AbortSignal): Promise<{ content: Array<{ type: 'text'; text: string }>; details: QuestionDetails }> {
   if (!ctx.hasUI) {
     return {
       content: [{ type: 'text', text: 'Error: UI not available (running in non-interactive mode)' }],
@@ -286,7 +412,15 @@ async function askOne(params: QuestionSpec, ctx: ExtensionContext): Promise<{ co
   // through the dialog primitives there instead. askUserQuestionTimeout is a TUI
   // concept (a countdown, a keypress resetting it): the dialog-primitive fallback
   // has no keyboard or visible countdown to drive it, so it is not applied there.
-  const result = ctx.mode === 'tui' ? await askViaOverlay(params, ctx, allOptions, multiSelect, askUserQuestionTimeoutMs()) : await askViaDialogs(params, ctx, allOptions, multiSelect)
+  const timeoutMs = ctx.mode === 'tui' ? askUserQuestionTimeoutMs() : undefined
+  const remote = ctx.mode === 'tui' ? offerRemoteQuestion(params, ctx, events, signal, timeoutMs) : undefined
+  const resolution = remote === undefined ? undefined : await remote
+  let result: QuestionAnswer
+  if (ctx.mode === 'tui') {
+    result = resolution?.kind === 'result' ? resolution.value : await askViaOverlay(params, ctx, allOptions, multiSelect, timeoutMs)
+  } else {
+    result = await askViaDialogs(params, ctx, allOptions, multiSelect)
+  }
 
   // Build simple options list for details; header/multiSelect appear only when set,
   // so single-select details are unchanged.
