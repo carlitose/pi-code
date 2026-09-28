@@ -25,6 +25,8 @@ In TUI mode, before opening the custom overlay, `question` emits `pi-code:questi
 
 Only the claimant can settle once with a typed outcome: selected indices, single-select free text, explicit cancellation, or a local fallback. `pi-code` validates indices, cardinality, free-text eligibility and the live session before converting the result to its existing `QuestionDetails`/tool text. A stale, duplicate, post-abort or replaced-session settlement cannot answer the question. Do not show a local overlay concurrently with a claimed remote request. The tool's signal and the configured question idle timeout bound the wait; activity resets that configured timer. A configured timeout uses the existing no-answer/timed-out semantics. Without one, a fixed five-minute remote ceiling releases the tool to its local overlay rather than inventing an idle-timeout setting.
 
+While a responder owns the request, the tool emits a partial progress result explaining that it is waiting remotely and that delivery may still be pending. This is not transport confirmation or a user answer. A declined or expired remote wait emits a second progress result directing the operator to the local dialog and warning that the previous remote question is no longer answerable. Final `QuestionDetails`, timeout semantics and the event contract remain unchanged; an unclaimed request produces no remote-wait progress.
+
 The event is a capability seam, not a transport protocol: `pi-code` owns the question/result semantics; a Telegram adapter owns pairing, target ownership, notification, reply decoding and no-replay behavior. The callback travels only within the Pi process and is never persisted or sent over Telegram.
 
 ## Alternatives considered

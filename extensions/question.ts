@@ -215,19 +215,26 @@ export default function question(pi: ExtensionAPI) {
     // parallel leave the first unanswerable and the run unable to finish.
     executionMode: 'sequential',
 
-    async execute(_toolCallId, rawParams, signal, _onUpdate, ctx) {
+    async execute(_toolCallId, rawParams, signal, onUpdate, ctx) {
+      const reportWait = (text: string): void => {
+        try {
+          onUpdate?.({ content: [{ type: 'text', text }], details: undefined })
+        } catch {
+          // Progress is advisory; renderer failures must not strand a claimed question.
+        }
+      }
       const specs = questionList(rawParams as Partial<QuestionSpec> & { questions?: QuestionSpec[] })
       if (specs.length === 0) {
         return { content: [{ type: 'text', text: 'Error: No question provided' }], details: { question: '', options: [], answer: null } as QuestionDetails }
       }
-      if (specs.length === 1) return await askOne(specs[0], ctx, pi.events, signal)
+      if (specs.length === 1) return await askOne(specs[0], ctx, pi.events, signal, reportWait)
 
       // Several questions are asked in sequence; a cancel ends the run, since the
       // remaining answers would be guesses about a flow the user just declined.
       const texts: string[] = []
       const collected: QuestionDetails[] = []
       for (const spec of specs) {
-        const result = await askOne(spec, ctx, pi.events, signal)
+        const result = await askOne(spec, ctx, pi.events, signal, reportWait)
         const detail = result.details as QuestionDetails
         collected.push(detail)
         texts.push(`${spec.question}\n${result.content[0].text}`)
@@ -283,7 +290,7 @@ type QuestionAnswer = Awaited<ReturnType<typeof askViaOverlay>>
 type RemoteResolution = { kind: 'result'; value: QuestionAnswer } | { kind: 'pass' }
 
 /** An unclaimed offer never inserts an async gap before the local overlay opens. */
-function offerRemoteQuestion(params: QuestionSpec, ctx: ExtensionContext, events: ExtensionAPI['events'] | undefined, signal: AbortSignal | undefined, timeoutMs: number | undefined): Promise<RemoteResolution> | undefined {
+function offerRemoteQuestion(params: QuestionSpec, ctx: ExtensionContext, events: ExtensionAPI['events'] | undefined, signal: AbortSignal | undefined, timeoutMs: number | undefined, reportWait?: (text: string) => void): Promise<RemoteResolution> | undefined {
   if (!events) return undefined
   if (signal?.aborted) return Promise.resolve({ kind: 'result', value: null })
 
@@ -376,7 +383,12 @@ function offerRemoteQuestion(params: QuestionSpec, ctx: ExtensionContext, events
     // It must not reopen the overlay in an aborted session.
     return settled ? pending : undefined
   }
-  if (!settled) scheduleTimeout()
+  if (!settled) {
+    scheduleTimeout()
+    // A claim is not delivery confirmation. Do not advertise an answerable
+    // remote prompt before the responder has completed its transport work.
+    reportWait?.(`Waiting for a remote responder; delivery may still be pending. Only a reply to the current remote question can answer it. ${timeoutMs === undefined ? 'Local input resumes after 5 minutes without an answer.' : 'The configured idle timeout applies.'}`)
+  }
   return pending.finally(() => {
     if (timer !== undefined) clearTimeout(timer)
     signal?.removeEventListener('abort', abort)
@@ -384,7 +396,7 @@ function offerRemoteQuestion(params: QuestionSpec, ctx: ExtensionContext, events
   })
 }
 
-async function askOne(params: QuestionSpec, ctx: ExtensionContext, events?: ExtensionAPI['events'], signal?: AbortSignal): Promise<{ content: Array<{ type: 'text'; text: string }>; details: QuestionDetails }> {
+async function askOne(params: QuestionSpec, ctx: ExtensionContext, events?: ExtensionAPI['events'], signal?: AbortSignal, reportWait?: (text: string) => void): Promise<{ content: Array<{ type: 'text'; text: string }>; details: QuestionDetails }> {
   if (!ctx.hasUI) {
     return {
       content: [{ type: 'text', text: 'Error: UI not available (running in non-interactive mode)' }],
@@ -413,8 +425,9 @@ async function askOne(params: QuestionSpec, ctx: ExtensionContext, events?: Exte
   // concept (a countdown, a keypress resetting it): the dialog-primitive fallback
   // has no keyboard or visible countdown to drive it, so it is not applied there.
   const timeoutMs = ctx.mode === 'tui' ? askUserQuestionTimeoutMs() : undefined
-  const remote = ctx.mode === 'tui' ? offerRemoteQuestion(params, ctx, events, signal, timeoutMs) : undefined
+  const remote = ctx.mode === 'tui' ? offerRemoteQuestion(params, ctx, events, signal, timeoutMs, reportWait) : undefined
   const resolution = remote === undefined ? undefined : await remote
+  if (resolution?.kind === 'pass') reportWait?.('Remote wait ended without an answer; answer in the local dialog. Replies to the previous remote question are no longer accepted.')
   let result: QuestionAnswer
   if (ctx.mode === 'tui') {
     result = resolution?.kind === 'result' ? resolution.value : await askViaOverlay(params, ctx, allOptions, multiSelect, timeoutMs)

@@ -209,6 +209,87 @@ describe('question remote offer', () => {
     ui: { custom },
   })
 
+  it('shows a provisional remote wait without claiming delivery or rendering cancellation', async () => {
+    const custom = vi.fn(async () => null)
+    let settle: ReturnType<RemoteQuestionOffer['claim']>
+    const updates: ToolResult[] = []
+    const tool = setupRemote((offer) => {
+      settle = offer.claim()
+    })
+    const result = tool.execute('call-1', { question: 'Pick one', options: OPTIONS }, undefined, (update: ToolResult) => updates.push(update), context(custom))
+    try {
+      expect(updates).toHaveLength(1)
+      expect(updates[0].content[0].text).toMatch(/Waiting for a remote responder/)
+      expect(updates[0].content[0].text).toMatch(/delivery may still be pending/)
+      expect(updates[0].details).toBeUndefined()
+      expect(lines(tool.renderResult(updates[0], { isPartial: true }, theme)).join(' ')).not.toContain('Cancelled')
+      expect(custom).not.toHaveBeenCalled()
+    } finally {
+      settle?.({ action: 'answer', indices: [2] })
+      await result
+    }
+    expect((await result).details).toMatchObject({ answer: 'Beta' })
+  })
+
+  it('shows the local fallback after the fixed remote wait and rejects late replies', async () => {
+    vi.useFakeTimers()
+    const updates: ToolResult[] = []
+    const custom = vi.fn(async () => ({ answer: 'Alpha', wasCustom: false, index: 1 }))
+    let settle: ReturnType<RemoteQuestionOffer['claim']>
+    const tool = setupRemote((offer) => {
+      settle = offer.claim()
+    })
+    const result = tool.execute('call-1', { question: 'Pick one', options: OPTIONS }, undefined, (update: ToolResult) => updates.push(update), context(custom))
+    try {
+      await vi.advanceTimersByTimeAsync(300_000)
+      expect((await result).details).toMatchObject({ answer: 'Alpha' })
+      expect(custom).toHaveBeenCalledOnce()
+      expect(updates).toHaveLength(2)
+      expect(updates[1].content[0].text).toMatch(/answer in the local dialog/)
+      expect(settle?.({ action: 'answer', indices: [2] })).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      settle?.({ action: 'cancel' })
+      await result
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not show a remote wait for an already-settled offer or an aborted unclaimed request', async () => {
+    const onUpdate = vi.fn()
+    const custom = vi.fn(async () => null)
+    const tool = setupRemote((offer) => offer.claim()?.({ action: 'answer', indices: [1] }))
+    await tool.execute('call-1', { question: 'Pick one', options: OPTIONS }, undefined, onUpdate, context(custom))
+    const controller = new AbortController()
+    controller.abort()
+    await tool.execute('call-2', { question: 'Pick one', options: OPTIONS }, controller.signal, onUpdate, context(custom))
+    expect(onUpdate).not.toHaveBeenCalled()
+    expect(custom).not.toHaveBeenCalled()
+  })
+
+  it('keeps a claimed question answerable when progress rendering throws', async () => {
+    const custom = vi.fn(async () => null)
+    let settle: ReturnType<RemoteQuestionOffer['claim']>
+    const tool = setupRemote((offer) => {
+      settle = offer.claim()
+    })
+    const onUpdate = () => {
+      throw new Error('progress unavailable')
+    }
+    const result = tool.execute('call-1', { question: 'Pick one', options: OPTIONS }, undefined, onUpdate, context(custom))
+    settle?.({ action: 'answer', indices: [1] })
+    expect((await result).details).toMatchObject({ answer: 'Alpha' })
+    expect(custom).not.toHaveBeenCalled()
+  })
+
+  it('does not show remote-wait progress when no responder claims', async () => {
+    const onUpdate = vi.fn()
+    const custom = vi.fn(async () => null)
+    await setupRemote(() => {}).execute('call-1', { question: 'Pick one', options: OPTIONS }, undefined, onUpdate, context(custom))
+    expect(onUpdate).not.toHaveBeenCalled()
+    expect(custom).toHaveBeenCalledOnce()
+  })
+
   it('preserves the local overlay when nobody claims synchronously', async () => {
     const seen: RemoteQuestionOffer[] = []
     const custom = vi.fn(async () => ({ answer: 'Alpha', wasCustom: false, index: 1 }))
