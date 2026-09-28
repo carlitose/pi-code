@@ -215,26 +215,19 @@ export default function question(pi: ExtensionAPI) {
     // parallel leave the first unanswerable and the run unable to finish.
     executionMode: 'sequential',
 
-    async execute(_toolCallId, rawParams, signal, onUpdate, ctx) {
-      const reportWait = (text: string): void => {
-        try {
-          onUpdate?.({ content: [{ type: 'text', text }], details: undefined })
-        } catch {
-          // Progress is advisory; renderer failures must not strand a claimed question.
-        }
-      }
+    async execute(_toolCallId, rawParams, signal, _onUpdate, ctx) {
       const specs = questionList(rawParams as Partial<QuestionSpec> & { questions?: QuestionSpec[] })
       if (specs.length === 0) {
         return { content: [{ type: 'text', text: 'Error: No question provided' }], details: { question: '', options: [], answer: null } as QuestionDetails }
       }
-      if (specs.length === 1) return await askOne(specs[0], ctx, pi.events, signal, reportWait)
+      if (specs.length === 1) return await askOne(specs[0], ctx, pi.events, signal)
 
       // Several questions are asked in sequence; a cancel ends the run, since the
       // remaining answers would be guesses about a flow the user just declined.
       const texts: string[] = []
       const collected: QuestionDetails[] = []
       for (const spec of specs) {
-        const result = await askOne(spec, ctx, pi.events, signal, reportWait)
+        const result = await askOne(spec, ctx, pi.events, signal)
         const detail = result.details as QuestionDetails
         collected.push(detail)
         texts.push(`${spec.question}\n${result.content[0].text}`)
@@ -287,116 +280,114 @@ export default function question(pi: ExtensionAPI) {
 }
 
 type QuestionAnswer = Awaited<ReturnType<typeof askViaOverlay>>
-type RemoteResolution = { kind: 'result'; value: QuestionAnswer } | { kind: 'pass' }
 
-/** An unclaimed offer never inserts an async gap before the local overlay opens. */
-function offerRemoteQuestion(params: QuestionSpec, ctx: ExtensionContext, events: ExtensionAPI['events'] | undefined, signal: AbortSignal | undefined, timeoutMs: number | undefined, reportWait?: (text: string) => void): Promise<RemoteResolution> | undefined {
+/** A claimed offer raced against the open overlay: whichever answers first wins. */
+interface RemoteQuestion {
+  /** Routes remote answers into the overlay and remote activity into its idle timer. */
+  attach: (answer: (value: QuestionAnswer) => void, touch: () => void) => void
+  /** Ends the offer; the responder's settle handle and touch are rejected from then on. */
+  close: () => void
+}
+type RemoteOffer = { kind: 'settled'; value: QuestionAnswer } | { kind: 'claimed'; remote: RemoteQuestion }
+
+function validIndices(indices: unknown, count: number, multiSelect: boolean): indices is number[] {
+  if (!Array.isArray(indices) || (!multiSelect && indices.length !== 1)) return false
+  return new Set(indices).size === indices.length && indices.every((index) => Number.isInteger(index) && index >= 1 && index <= count)
+}
+
+/** A remote outcome as the answer it stands for: null is a cancel, undefined is a
+ * pass or anything this question cannot accept, which must never become an answer. */
+function remoteAnswer(outcome: RemoteQuestionOutcome, options: DisplayOption[], multiSelect: boolean): QuestionAnswer | undefined {
+  if (outcome === null || typeof outcome !== 'object') return undefined
+  if (outcome.action === 'cancel') return null
+  if (outcome.action === 'text') {
+    const text = typeof outcome.text === 'string' ? outcome.text.trim() : ''
+    return !multiSelect && text ? { answer: text, wasCustom: true } : undefined
+  }
+  if (outcome.action !== 'answer' || !validIndices(outcome.indices, options.length, multiSelect)) return undefined
+  const { indices } = outcome
+  const checked = options.map((_, index) => indices.includes(index + 1))
+  return { answer: selectedLabels(options, checked), wasCustom: false, ...(multiSelect ? {} : { index: indices[0] }) }
+}
+
+/** Undefined when nobody claims synchronously, so the overlay opens with no async gap. */
+function offerRemoteQuestion(params: QuestionSpec, allOptions: DisplayOption[], ctx: ExtensionContext, events: ExtensionAPI['events'] | undefined, signal: AbortSignal | undefined): RemoteOffer | undefined {
   if (!events) return undefined
-  if (signal?.aborted) return Promise.resolve({ kind: 'result', value: null })
+  if (signal?.aborted) return { kind: 'settled', value: null }
 
-  const sessionId = ctx.sessionManager.getSessionId()
   const multiSelect = params.multiSelect === true
   const controller = new AbortController()
   let accepting = true
   let claimed = false
-  let settled = false
-  let timer: ReturnType<typeof setTimeout> | undefined
-  let complete!: (resolution: RemoteResolution) => void
-  const pending = new Promise<RemoteResolution>((resolve) => {
-    complete = resolve
-  })
-  const finish = (resolution: RemoteResolution): void => {
-    if (settled) return
-    settled = true
-    complete(resolution)
+  let early: { value: QuestionAnswer } | undefined
+  let deliver: ((value: QuestionAnswer) => void) | undefined
+  let touchOverlay: (() => void) | undefined
+  const close = (): void => {
+    controller.abort()
+    signal?.removeEventListener('abort', abort)
   }
-  const abort = () => finish({ kind: 'result', value: null })
+  const settle = (value: QuestionAnswer): void => {
+    close()
+    if (deliver) deliver(value)
+    else early = { value }
+  }
+  // Pi aborts the turn before a session replacement invalidates ctx, so this is
+  // also the session-replacement path; ctx is never read after emission.
+  const abort = (): void => settle(null)
   signal?.addEventListener('abort', abort, { once: true })
-  const scheduleTimeout = (): void => {
-    if (timer !== undefined) clearTimeout(timer)
-    // With no configured timeout this is a fixed ceiling, not a silent setting.
-    timer = setTimeout(() => finish(timeoutMs === undefined ? { kind: 'pass' } : { kind: 'result', value: { answer: '', wasCustom: false, timedOut: true } }), timeoutMs ?? 300_000)
-  }
 
   const offer: RemoteQuestionOffer = {
     version: 1,
     requestId: randomUUID(),
-    sessionId,
+    sessionId: ctx.sessionManager.getSessionId(),
     question: params.question,
     header: shortHeader(params.header),
     options: params.options.map(({ label, description }) => ({ label, ...(description === undefined ? {} : { description }) })),
     multiSelect,
-    allowFreeText: !multiSelect,
+    allowFreeText: allOptions.some((option) => option.isOther === true),
     signal: controller.signal,
     claim: () => {
-      if (!accepting || claimed || settled || controller.signal.aborted) return undefined
+      if (!accepting || claimed || controller.signal.aborted) return undefined
       claimed = true
       return (outcome) => {
-        if (settled || controller.signal.aborted) return false
-        if (outcome === null || typeof outcome !== 'object') {
-          finish({ kind: 'pass' })
-          return false
-        }
-        if (ctx.sessionManager.getSessionId() !== sessionId) {
-          finish({ kind: 'result', value: null })
-          return false
-        }
-        if (outcome.action === 'pass') {
-          finish({ kind: 'pass' })
+        if (controller.signal.aborted) return false
+        const value = remoteAnswer(outcome, params.options, multiSelect)
+        if (value !== undefined) {
+          settle(value)
           return true
         }
-        if (outcome.action === 'cancel') {
-          finish({ kind: 'result', value: null })
-          return true
-        }
-        if (outcome.action === 'text' && !multiSelect && typeof outcome.text === 'string' && outcome.text.trim()) {
-          finish({ kind: 'result', value: { answer: outcome.text.trim(), wasCustom: true } })
-          return true
-        }
-        if (outcome.action === 'answer' && Array.isArray(outcome.indices) && (multiSelect || outcome.indices.length === 1) && new Set(outcome.indices).size === outcome.indices.length && outcome.indices.every((index) => Number.isInteger(index) && index >= 1 && index <= params.options.length)) {
-          const checked = params.options.map((_, index) => outcome.indices.includes(index + 1))
-          finish({ kind: 'result', value: { answer: selectedLabels(params.options, checked), wasCustom: false, ...(multiSelect ? {} : { index: outcome.indices[0] }) } })
-          return true
-        }
-        // Invalid remote data must not turn into a user answer or strand the tool.
-        finish({ kind: 'pass' })
-        return false
+        // A pass or invalid reply only withdraws the remote side; the overlay stays.
+        close()
+        return outcome?.action === 'pass'
       }
     },
     touch: () => {
-      if (!claimed || settled || controller.signal.aborted || timeoutMs === undefined) return false
-      if (!accepting) scheduleTimeout()
+      if (!claimed || controller.signal.aborted) return false
+      touchOverlay?.()
       return true
     },
   }
 
-  try {
-    events.emit(REMOTE_QUESTION_CHANNEL, offer)
-  } catch {
-    finish({ kind: 'pass' })
-  }
+  events.emit(REMOTE_QUESTION_CHANNEL, offer)
   accepting = false
-  if (!claimed) {
-    signal?.removeEventListener('abort', abort)
-    controller.abort()
-    // An abort or emitter failure during emission has already resolved pending.
-    // It must not reopen the overlay in an aborted session.
-    return settled ? pending : undefined
+  if (early) return { kind: 'settled', value: early.value }
+  if (!claimed || controller.signal.aborted) {
+    close()
+    return undefined
   }
-  if (!settled) {
-    scheduleTimeout()
-    // A claim is not delivery confirmation. Do not advertise an answerable
-    // remote prompt before the responder has completed its transport work.
-    reportWait?.(`Waiting for a remote responder; delivery may still be pending. Only a reply to the current remote question can answer it. ${timeoutMs === undefined ? 'Local input resumes after 5 minutes without an answer.' : 'The configured idle timeout applies.'}`)
+  return {
+    kind: 'claimed',
+    remote: {
+      attach: (answer, touch) => {
+        deliver = answer
+        touchOverlay = touch
+      },
+      close,
+    },
   }
-  return pending.finally(() => {
-    if (timer !== undefined) clearTimeout(timer)
-    signal?.removeEventListener('abort', abort)
-    controller.abort()
-  })
 }
 
-async function askOne(params: QuestionSpec, ctx: ExtensionContext, events?: ExtensionAPI['events'], signal?: AbortSignal, reportWait?: (text: string) => void): Promise<{ content: Array<{ type: 'text'; text: string }>; details: QuestionDetails }> {
+async function askOne(params: QuestionSpec, ctx: ExtensionContext, events?: ExtensionAPI['events'], signal?: AbortSignal): Promise<{ content: Array<{ type: 'text'; text: string }>; details: QuestionDetails }> {
   if (!ctx.hasUI) {
     return {
       content: [{ type: 'text', text: 'Error: UI not available (running in non-interactive mode)' }],
@@ -424,13 +415,17 @@ async function askOne(params: QuestionSpec, ctx: ExtensionContext, events?: Exte
   // through the dialog primitives there instead. askUserQuestionTimeout is a TUI
   // concept (a countdown, a keypress resetting it): the dialog-primitive fallback
   // has no keyboard or visible countdown to drive it, so it is not applied there.
-  const timeoutMs = ctx.mode === 'tui' ? askUserQuestionTimeoutMs() : undefined
-  const remote = ctx.mode === 'tui' ? offerRemoteQuestion(params, ctx, events, signal, timeoutMs, reportWait) : undefined
-  const resolution = remote === undefined ? undefined : await remote
-  if (resolution?.kind === 'pass') reportWait?.('Remote wait ended without an answer; answer in the local dialog. Replies to the previous remote question are no longer accepted.')
+  const offer = ctx.mode === 'tui' ? offerRemoteQuestion(params, allOptions, ctx, events, signal) : undefined
   let result: QuestionAnswer
-  if (ctx.mode === 'tui') {
-    result = resolution?.kind === 'result' ? resolution.value : await askViaOverlay(params, ctx, allOptions, multiSelect, timeoutMs)
+  if (offer?.kind === 'settled') {
+    result = offer.value
+  } else if (ctx.mode === 'tui') {
+    const remote = offer?.remote
+    try {
+      result = await askViaOverlay(params, ctx, allOptions, multiSelect, askUserQuestionTimeoutMs(), remote)
+    } finally {
+      remote?.close()
+    }
   } else {
     result = await askViaDialogs(params, ctx, allOptions, multiSelect)
   }
@@ -492,7 +487,7 @@ const IDLE_TICK_MS = 250
  * mechanics are testable directly, independent of where timeoutMs itself is read
  * from (askUserQuestionTimeoutMs, tested separately).
  */
-export function askViaOverlay(params: QuestionSpec, ctx: ExtensionContext, allOptions: DisplayOption[], multiSelect: boolean, timeoutMs?: number): Promise<{ answer: string; wasCustom: boolean; index?: number; timedOut?: boolean } | null> {
+export function askViaOverlay(params: QuestionSpec, ctx: ExtensionContext, allOptions: DisplayOption[], multiSelect: boolean, timeoutMs?: number, remote?: RemoteQuestion): Promise<{ answer: string; wasCustom: boolean; index?: number; timedOut?: boolean } | null> {
   return ctx.ui.custom<{ answer: string; wasCustom: boolean; index?: number; timedOut?: boolean } | null>((tui: Parameters<Parameters<ExtensionContext['ui']['custom']>[0]>[0], theme: Theme, _kb: unknown, done: (value: { answer: string; wasCustom: boolean; index?: number; timedOut?: boolean } | null) => void) => {
     let optionIndex = 0
     let editMode = false
@@ -515,6 +510,8 @@ export function askViaOverlay(params: QuestionSpec, ctx: ExtensionContext, allOp
      * here, so the interval can never outlive the overlay it belongs to. */
     function finish(value: { answer: string; wasCustom: boolean; index?: number; timedOut?: boolean } | null): void {
       stopIdleTimer()
+      // Closed before done, so a remote reply racing a local answer is rejected.
+      remote?.close()
       done(value)
     }
 
@@ -522,6 +519,8 @@ export function askViaOverlay(params: QuestionSpec, ctx: ExtensionContext, allOp
       if (timeoutMs === undefined) return
       deadline = Date.now() + timeoutMs
     }
+
+    remote?.attach(finish, resetIdleTimer)
 
     function fireTimeout(): void {
       // Claude: "submits any options you'd already selected". Single-select has
