@@ -139,6 +139,27 @@ describe('pi session replacement contract', () => {
   })
 })
 
+describe('the host-provided dependency contract', () => {
+  it('keeps TypeBox on the host peer path instead of bundling a runtime copy', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '..', 'package.json'), 'utf-8')) as {
+      dependencies?: Record<string, string>
+      devDependencies?: Record<string, string>
+      peerDependencies: Record<string, string>
+      bundledDependencies?: string[]
+    }
+    expect(pkg.peerDependencies.typebox).toBe('*')
+    expect(pkg.dependencies?.typebox).toBeUndefined()
+    expect(pkg.bundledDependencies ?? []).not.toContain('typebox')
+
+    const lock = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '..', 'package-lock.json'), 'utf-8')) as {
+      packages: Record<string, { dependencies?: Record<string, string>; devDependencies?: Record<string, string>; peerDependencies?: Record<string, string> }>
+    }
+    expect(lock.packages[''].dependencies?.typebox).toBeUndefined()
+    expect(lock.packages[''].peerDependencies?.typebox).toBe('*')
+    expect(lock.packages[''].devDependencies?.typebox).toBe(pkg.devDependencies?.typebox)
+  })
+})
+
 // pi added `agent_settled` in 0.80.4 (its CHANGELOG: "Added extension and RPC
 // agent_settled events plus session-level idle waiting for fully settled agent runs").
 // Several extensions rely on it unconditionally, so on an older runtime it simply never
@@ -168,10 +189,10 @@ describe('the peer version floor', () => {
     const pkg = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '..', 'package.json'), 'utf-8')) as {
       peerDependencies: Record<string, string>
     }
-    const peers = Object.entries(pkg.peerDependencies)
-    expect(peers.length).toBeGreaterThan(0)
-
-    for (const [name, range] of peers) {
+    const runtimePeers = ['@earendil-works/pi-ai', '@earendil-works/pi-coding-agent', '@earendil-works/pi-tui']
+    for (const name of runtimePeers) {
+      const range = pkg.peerDependencies[name]
+      if (range === undefined) throw new Error(`missing runtime peer ${name}`)
       expect([name, atLeast(parseMinimum(range), AGENT_SETTLED_SINCE)]).toEqual([name, true])
     }
   })
