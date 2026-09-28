@@ -4,6 +4,8 @@
  * only), or space-toggled checkboxes when `multiSelect` is set. An optional `header`
  * labels the question. Escape in the editor returns to options; Escape in options cancels.
  * Multiple questions per call are not batched; ask sequentially.
+ * On the TUI each question is also offered to a remote responder over pi.events
+ * (REMOTE_QUESTION_CHANNEL); the first answer, local or remote, wins.
  */
 
 import { randomUUID } from 'node:crypto'
