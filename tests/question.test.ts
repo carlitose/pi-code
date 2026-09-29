@@ -295,6 +295,76 @@ describe('question remote offer', () => {
     }
   })
 
+  it('still cancels on a turn abort after the remote side withdrew', async () => {
+    const controller = new AbortController()
+    const live = liveOverlay()
+    let settle: ReturnType<RemoteQuestionOffer['claim']>
+    const result = setupRemote((offer) => {
+      settle = offer.claim()
+    }).execute('call-1', { question: 'Pick one', options: OPTIONS }, controller.signal, undefined, context(live.custom))
+    expect(settle?.({ action: 'pass' })).toBe(true)
+    controller.abort()
+    expect((await result).details).toMatchObject({ answer: null })
+  })
+
+  it('answers with the indices it validated, read once from the outcome', async () => {
+    const reads = [[1], [99]]
+    const outcome = {
+      action: 'answer',
+      get indices() {
+        return reads.shift() ?? [99]
+      },
+    }
+    const live = liveOverlay()
+    let settle: ReturnType<RemoteQuestionOffer['claim']>
+    const result = setupRemote((offer) => {
+      settle = offer.claim()
+    }).execute('call-1', { question: 'Pick one', options: OPTIONS }, undefined, undefined, context(live.custom))
+    expect(settle?.(outcome as never)).toBe(true)
+    expect((await result).content[0].text).toBe('User selected: 1. Alpha')
+  })
+
+  it('leaves no abort listener on the turn signal once each question ends', async () => {
+    const controller = new AbortController()
+    const active = new Set<unknown>()
+    const add = controller.signal.addEventListener.bind(controller.signal)
+    const remove = controller.signal.removeEventListener.bind(controller.signal)
+    vi.spyOn(controller.signal, 'addEventListener').mockImplementation((type, listener, options) => {
+      active.add(listener)
+      add(type, listener, options)
+    })
+    vi.spyOn(controller.signal, 'removeEventListener').mockImplementation((type, listener, options) => {
+      active.delete(listener)
+      remove(type, listener, options)
+    })
+    const early = setupRemote((offer) => offer.claim()?.({ action: 'answer', indices: [1] }))
+    await early.execute('call-1', { question: 'Pick one', options: OPTIONS }, controller.signal, undefined, context(vi.fn()))
+    expect(active.size).toBe(0)
+    const live = liveOverlay()
+    const late = setupRemote((offer) => {
+      offer.claim()
+    }).execute('call-2', { question: 'Pick one', options: OPTIONS }, controller.signal, undefined, context(live.custom))
+    expect(active.size).toBe(1)
+    live.input(RAW.enter)
+    await late
+    expect(active.size).toBe(0)
+  })
+
+  it('withdraws a claimed offer when the overlay fails to open', async () => {
+    let offer: RemoteQuestionOffer | undefined
+    let settle: ReturnType<RemoteQuestionOffer['claim']>
+    const custom = vi.fn(async () => {
+      throw new Error('no terminal')
+    })
+    const result = setupRemote((request) => {
+      offer = request
+      settle = request.claim()
+    }).execute('call-1', { question: 'Pick one', options: OPTIONS }, undefined, undefined, context(custom))
+    await expect(result).rejects.toThrow('no terminal')
+    expect(offer?.signal.aborted).toBe(true)
+    expect(settle?.({ action: 'answer', indices: [1] })).toBe(false)
+  })
+
   it('does not open the overlay for an offer settled during emission or an aborted request', async () => {
     const custom = vi.fn(async () => null)
     const tool = setupRemote((offer) => offer.claim()?.({ action: 'answer', indices: [1] }))
@@ -308,9 +378,9 @@ describe('question remote offer', () => {
   it('preserves the local overlay when nobody claims synchronously', async () => {
     const seen: RemoteQuestionOffer[] = []
     const custom = vi.fn(async () => ({ answer: 'Alpha', wasCustom: false, index: 1 }))
-    const result = await setupRemote((offer) => seen.push(offer)).execute('call-1', { question: 'Pick one', options: OPTIONS }, undefined, undefined, context(custom))
+    const result = await setupRemote((offer) => seen.push(offer)).execute('call-1', { question: 'Pick one', header: 'A long header', options: OPTIONS } as never, undefined, undefined, context(custom))
     expect(seen).toHaveLength(1)
-    expect(seen[0]).toMatchObject({ version: 1, sessionId: 'session-1', question: 'Pick one', options: OPTIONS, multiSelect: false, allowFreeText: true })
+    expect(seen[0]).toMatchObject({ version: 1, sessionId: 'session-1', question: 'Pick one', header: 'A long heade', options: OPTIONS, multiSelect: false, allowFreeText: true })
     expect(seen[0].requestId).toEqual(expect.any(String))
     expect(seen[0].claim()).toBeUndefined()
     expect(custom).toHaveBeenCalledOnce()

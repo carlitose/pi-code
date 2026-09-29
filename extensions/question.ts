@@ -306,8 +306,12 @@ function remoteAnswer(outcome: RemoteQuestionOutcome, options: DisplayOption[], 
     const text = typeof outcome.text === 'string' ? outcome.text.trim() : ''
     return !multiSelect && text ? { answer: text, wasCustom: true } : undefined
   }
-  if (outcome.action !== 'answer' || !validIndices(outcome.indices, options.length, multiSelect)) return undefined
-  const { indices } = outcome
+  if (outcome.action !== 'answer') return undefined
+  // Read once and copied, so a getter or Proxy cannot answer with other indices
+  // than the ones that passed validation.
+  const raw: unknown = outcome.indices
+  const indices: unknown = Array.isArray(raw) ? [...raw] : undefined
+  if (!validIndices(indices, options.length, multiSelect)) return undefined
   const checked = options.map((_, index) => indices.includes(index + 1))
   return { answer: selectedLabels(options, checked), wasCustom: false, ...(multiSelect ? {} : { index: indices[0] }) }
 }
@@ -319,7 +323,6 @@ function offerRemoteQuestion(params: QuestionSpec, allOptions: DisplayOption[], 
 
   const multiSelect = params.multiSelect === true
   const controller = new AbortController()
-  let accepting = true
   let claimed = false
   let early: { value: QuestionAnswer } | undefined
   let deliver: ((value: QuestionAnswer) => void) | undefined
@@ -349,7 +352,7 @@ function offerRemoteQuestion(params: QuestionSpec, allOptions: DisplayOption[], 
     allowFreeText: allOptions.some((option) => option.isOther === true),
     signal: controller.signal,
     claim: () => {
-      if (!accepting || claimed || controller.signal.aborted) return undefined
+      if (claimed || controller.signal.aborted) return undefined
       claimed = true
       return (outcome) => {
         if (controller.signal.aborted) return false
@@ -358,8 +361,9 @@ function offerRemoteQuestion(params: QuestionSpec, allOptions: DisplayOption[], 
           settle(value)
           return true
         }
-        // A pass or invalid reply only withdraws the remote side; the overlay stays.
-        close()
+        // A pass or invalid reply only withdraws the remote side; the overlay stays
+        // open, and a turn abort must still cancel it.
+        controller.abort()
         return outcome?.action === 'pass'
       }
     },
@@ -371,7 +375,6 @@ function offerRemoteQuestion(params: QuestionSpec, allOptions: DisplayOption[], 
   }
 
   events.emit(REMOTE_QUESTION_CHANNEL, offer)
-  accepting = false
   if (early) return { kind: 'settled', value: early.value }
   if (!claimed || controller.signal.aborted) {
     close()
