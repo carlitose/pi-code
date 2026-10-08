@@ -87,6 +87,22 @@ const listMark = (status: TodoStatus): string => {
 /** Plain-text list, shared by the list action and the non-terminal /todos path. */
 const plainTodoList = (todos: Todo[]): string => (todos.length ? todos.map((t) => `${listMark(t.status)} #${t.id}: ${t.text}`).join('\n') : 'No todos')
 
+/** Custom message type of the hidden reminder that keeps the model aware of its open todos. */
+export const TODO_REMINDER = 'todo-reminder'
+/** Tool calls without a todo call after which the list counts as stale. */
+export const STALE_TOOL_CALLS = 20
+
+/**
+ * The model sees its list only in its own past tool results; a compaction or a long stretch of
+ * other work drops it from view while the items stay open. Undefined when nothing is open.
+ */
+const reminderText = (todos: Todo[]): string | undefined => {
+  const open = todos.filter((t) => t.status !== 'completed')
+  if (open.length === 0) return undefined
+  const done = todos.length - open.length
+  return [`Your todo list still has ${open.length} open item(s) (${done} completed):`, plainTodoList(open), 'Keep it current with the todo tool: complete what is finished, start what you work on, delete items that no longer apply, or clear the list if the work changed.'].join('\n')
+}
+
 const overlayLabel = (todo: Todo, theme: Theme): string => {
   if (todo.status === 'completed') return theme.fg('dim', todo.text)
   if (todo.status === 'in_progress') return theme.fg('text', todo.activeForm ?? todo.text)
@@ -376,12 +392,40 @@ export default function todoExtension(pi: ExtensionAPI) {
   pi.on('session_compact', async (_event, ctx) => replayAndRefresh(ctx))
   pi.on('session_shutdown', async () => overlay.dispose())
 
+  // Tool calls since the last todo call, and whether this stale stretch was already reminded.
+  let callsSinceTodo = 0
+  let remindedStale = false
+
   // Reads live state at render time; never replay the branch here (the
   // branch is stale until message_end runs after tool_execution_end).
   pi.on('tool_execution_end', async (event) => {
-    if (event.toolName !== TOOL_NAME || event.isError) return
+    if (event.toolName !== TOOL_NAME) {
+      callsSinceTodo++
+      return
+    }
+    callsSinceTodo = 0
+    remindedStale = false
+    if (event.isError) return
     overlay.update()
   })
+
+  // Each new prompt starts with the open items in view; hidden from the TUI, which has the overlay.
+  pi.on('before_agent_start', async () => {
+    const content = reminderText(todos)
+    return content ? { message: { customType: TODO_REMINDER, content, display: false } } : undefined
+  })
+
+  // Once per stale stretch, appended after the turn: earlier messages stay as they were. A
+  // handler's entries replace the ones proposed before it, so keep theirs and add ours. Pi 1.0
+  // reads boundary entries from a turn_end result; older hosts (and their types) ignore it.
+  const remindStale = async (event: { entries?: unknown[] }) => {
+    if (remindedStale || callsSinceTodo < STALE_TOOL_CALLS) return undefined
+    const content = reminderText(todos)
+    if (!content) return undefined
+    remindedStale = true
+    return { entries: [...(event.entries ?? []), { type: 'custom_message' as const, customType: TODO_REMINDER, content, display: false }] }
+  }
+  pi.on('turn_end', remindStale as never)
 
   const toolMessage = (text: string, details: TodoDetails) => ({
     content: [{ type: 'text' as const, text }],
