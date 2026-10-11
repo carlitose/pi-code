@@ -28,10 +28,11 @@ const USER_TEXT_CHARS = 12_000
 
 export const BLOCK_SYSTEM =
   "You are a checker. You receive the user's messages and the text an agent closed its turn with. " +
-  'Decide whether the agent closes the turn by stopping, waiting, or asking for a go-ahead, an ' +
-  'unblock, an approval or a solution because of a block, a limit, a STOP, a missing authorization ' +
-  'or a prerequisite. Closing because the work is done, reporting a result, or asking the user about ' +
-  "what the result should be is NOT stopping. If it stops, copy EXACTLY the sentence of the user's " +
+  'Decide whether the agent stops: it closes the turn while the work the user asked for is, by its ' +
+  'own account, not done (for example it waits, asks for a go-ahead, an unblock, an approval or a ' +
+  'solution, or reports that it did not retry) because of a block, a limit, a STOP, a missing ' +
+  'authorization or a prerequisite. Closing with the work done, or asking the user how the result ' +
+  "should be, is NOT stopping. If it stops, copy EXACTLY the sentence of the user's " +
   'messages that imposes that block, if one exists; otherwise null. Answer only with JSON: ' +
   '{"stops": true|false, "block": "short description or null", "user_quote": "exact sentence or null"}'
 
