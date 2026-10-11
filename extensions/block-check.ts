@@ -144,7 +144,6 @@ export default function blockCheckExtension(pi: ExtensionAPI) {
     const closing = messageText(last)
     const model = ctx.model
     if (!closing || !model) return
-    if (nudges >= MAX_NUDGES) return // until the user's next prompt or a turn that does not stop
     const users = userMessages(ctx)
     let verdict: BlockVerdict | undefined
     try {
@@ -160,6 +159,8 @@ export default function blockCheckExtension(pi: ExtensionAPI) {
       nudges = 0
       return
     }
+    // At the cap the stop goes through to the user, until their next prompt or a turn that does not stop.
+    if (nudges >= MAX_NUDGES) return
     nudges += 1
     const options = ctx.isIdle() ? { triggerTurn: true } : { triggerTurn: true, deliverAs: 'followUp' as const }
     pi.sendMessage({ customType: BLOCK_MESSAGE, content: nudgeText(verdict.block), display: true }, options)
