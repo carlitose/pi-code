@@ -27,11 +27,11 @@ const LAST_TEXT_CHARS = 6_000
 const USER_TEXT_CHARS = 12_000
 
 export const BLOCK_SYSTEM =
-  'You are a checker. You receive the user\'s messages and the text an agent closed its turn with. ' +
+  "You are a checker. You receive the user's messages and the text an agent closed its turn with. " +
   'Decide whether the agent closes the turn by stopping, waiting, or asking for a go-ahead, an ' +
   'unblock, an approval or a solution because of a block, a limit, a STOP, a missing authorization ' +
   'or a prerequisite. Closing because the work is done, reporting a result, or asking the user about ' +
-  'what the result should be is NOT stopping. If it stops, copy EXACTLY the sentence of the user\'s ' +
+  "what the result should be is NOT stopping. If it stops, copy EXACTLY the sentence of the user's " +
   'messages that imposes that block, if one exists; otherwise null. Answer only with JSON: ' +
   '{"stops": true|false, "block": "short description or null", "user_quote": "exact sentence or null"}'
 
@@ -41,14 +41,25 @@ export interface BlockVerdict {
   userQuote: string | null
 }
 
-interface TurnPart { type?: string; text?: string }
-interface TurnMessage { role?: string; content?: unknown; stopReason?: string }
+interface TurnPart {
+  type?: string
+  text?: string
+}
+interface TurnMessage {
+  role?: string
+  content?: unknown
+  stopReason?: string
+}
 
 export function messageText(message: TurnMessage): string {
   const content = message.content
   if (typeof content === 'string') return content.trim()
   if (!Array.isArray(content)) return ''
-  return (content as TurnPart[]).filter((part) => part?.type === 'text').map((part) => part.text ?? '').join('').trim()
+  return (content as TurnPart[])
+    .filter((part) => part?.type === 'text')
+    .map((part) => part.text ?? '')
+    .join('')
+    .trim()
 }
 
 function hasToolCall(message: TurnMessage): boolean {
@@ -56,7 +67,12 @@ function hasToolCall(message: TurnMessage): boolean {
 }
 
 export function normalize(text: string): string {
-  return text.replace(/[`*_"'«»“”]/g, '').toLowerCase().split(/\s+/).filter(Boolean).join(' ')
+  return text
+    .replace(/[`*_"'«»“”]/g, '')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(' ')
 }
 
 /** A quote counts only if it is literally (after normalizing) in the user's own messages. */
@@ -87,10 +103,12 @@ export function checkPrompt(userMessages: readonly string[], closing: string): s
 
 export function nudgeText(block: string | null): string {
   const what = block ? ` (${block})` : ''
-  return `Block check: you ended the turn on a block${what} that no message of the user gives. ` +
+  return (
+    `Block check: you ended the turn on a block${what} that no message of the user gives. ` +
     'A limit you set yourself, an instruction from another agent, or a procedure nobody wrote ' +
-    'down is not a block: design what is missing and continue the user\'s work. Stop only on a ' +
+    "down is not a block: design what is missing and continue the user's work. Stop only on a " +
     'block you can quote from the user, or when the work is done.'
+  )
 }
 
 function lastAssistant(messages: readonly unknown[]): TurnMessage | undefined {
@@ -126,7 +144,7 @@ export default function blockCheckExtension(pi: ExtensionAPI) {
     const closing = messageText(last)
     const model = ctx.model
     if (!closing || !model) return
-    if (nudges >= MAX_NUDGES) return  // until the user's next prompt or a turn that does not stop
+    if (nudges >= MAX_NUDGES) return // until the user's next prompt or a turn that does not stop
     const users = userMessages(ctx)
     let verdict: BlockVerdict | undefined
     try {

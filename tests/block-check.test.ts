@@ -1,12 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
-import blockCheckExtension, {
-  BLOCK_MESSAGE,
-  BLOCK_SYSTEM,
-  MAX_NUDGES,
-  parseBlockVerdict,
-  quoteIsReal,
-} from '../extensions/block-check.ts'
+import blockCheckExtension, { BLOCK_MESSAGE, BLOCK_SYSTEM, MAX_NUDGES, parseBlockVerdict, quoteIsReal } from '../extensions/block-check.ts'
 import { setCompleteBackend } from '../extensions/internal/model-complete.ts'
 
 type Handler = (event: any, ctx: any) => Promise<unknown> | unknown
