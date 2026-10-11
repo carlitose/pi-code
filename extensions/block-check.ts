@@ -29,11 +29,11 @@ const USER_TEXT_CHARS = 12_000
 export const BLOCK_SYSTEM =
   "You are a checker. You receive the user's messages and the text an agent closed its turn with. " +
   'Decide whether the agent stops: it closes the turn while the work the user asked for is, by its ' +
-  'own account, not done (for example it waits, asks for a go-ahead, an unblock, an approval or a ' +
-  'solution, or reports that it did not retry) because of a block, a limit, a STOP, a missing ' +
-  'authorization or a prerequisite. Closing with the work done, or asking the user how the result ' +
-  "should be, is NOT stopping. If it stops, copy EXACTLY the sentence of the user's " +
-  'messages that imposes that block, if one exists; otherwise null. Answer only with JSON: ' +
+  'own account, not done, and it is not asking the user how the result should be. There is usually a ' +
+  'reason (a block, a limit, a STOP, a missing authorization or prerequisite), but there may be none: ' +
+  'reporting that it is not green without having fixed it is stopping too. Closing with the work ' +
+  'done, or asking the user how the result should be, is NOT stopping. If it stops, copy EXACTLY the ' +
+  "sentence of the user's messages that requires stopping, if one exists; otherwise null. Answer only with JSON: " +
   '{"stops": true|false, "block": "short description or null", "user_quote": "exact sentence or null"}'
 
 export interface BlockVerdict {
@@ -105,10 +105,11 @@ export function checkPrompt(userMessages: readonly string[], closing: string): s
 export function nudgeText(block: string | null): string {
   const what = block ? ` (${block})` : ''
   return (
-    `Block check: you ended the turn on a block${what} that no message of the user gives. ` +
-    'A limit you set yourself, an instruction from another agent, or a procedure nobody wrote ' +
-    "down is not a block: design what is missing and continue the user's work. Stop only on a " +
-    'block you can quote from the user, or when the work is done.'
+    `Block check: you ended the turn with the work not done${what}, and no message of the user ` +
+    'asks you to stop there. A limit you set yourself, an instruction from another agent, or a ' +
+    "procedure nobody wrote down is not a block: design what is missing and continue the user's " +
+    'work. Stop only when the work is done, on a block you can quote from the user, or to ask the ' +
+    'user how the result should be.'
   )
 }
 
