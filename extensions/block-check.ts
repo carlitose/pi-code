@@ -7,7 +7,10 @@
  * A written rule ("what you cannot cite is not a gate") did not fire, so this checks it.
  *
  * After each completed turn, the session model reads the user's messages and the closing
- * text and answers whether the turn stops on a block, and with which user quote. A quote
+ * text and answers simple facts: is the work done, is the agent only asking how the result
+ * should be, and which user sentence, if any, tells it to stop. Asked "does it stop?" directly,
+ * the model answered "no" on plain stops 3 times out of 4; the split facts were stable. The
+ * turn stops when the work is not done and it is not a requirement question. A quote
  * counts only if it is literally in the user's messages. A stop without one sends the agent
  * back to work once more; at most MAX_NUDGES in a row, reset by the user's next prompt or by
  * a turn that does not stop, so a real impasse still reaches the user. Esc, errors and
@@ -28,13 +31,13 @@ const USER_TEXT_CHARS = 12_000
 
 export const BLOCK_SYSTEM =
   "You are a checker. You receive the user's messages and the text an agent closed its turn with. " +
-  'Decide whether the agent stops: it closes the turn while the work the user asked for is, by its ' +
-  'own account, not done, and it is not asking the user how the result should be. There is usually a ' +
-  'reason (a block, a limit, a STOP, a missing authorization or prerequisite), but there may be none: ' +
-  'reporting that it is not green without having fixed it is stopping too. Closing with the work ' +
-  'done, or asking the user how the result should be, is NOT stopping. If it stops, copy EXACTLY the ' +
-  "sentence of the user's messages that requires stopping, if one exists; otherwise null. Answer only with JSON: " +
-  '{"stops": true|false, "block": "short description or null", "user_quote": "exact sentence or null"}'
+  'Answer these questions about the closing text only, then JSON. ' +
+  'work_done: does the agent say the work the user asked for is finished and verified? ' +
+  'asks_how: is the agent only asking the user what the result should be (a requirement question)? ' +
+  'waits: does the agent ask for permission, confirmation, a go-ahead, a decision on how to proceed, or say it did not do/retry something? ' +
+  "user_quote: if the user's messages contain a sentence that explicitly tells the agent to stop or ask before this step, copy it EXACTLY; " +
+  'the request itself is never such a sentence; otherwise null. block: short description of why it stopped, or null. ' +
+  'Answer only with JSON: {"work_done": true|false, "asks_how": true|false, "waits": true|false, "block": "..."|null, "user_quote": "..."|null}'
 
 export interface BlockVerdict {
   stops: boolean
@@ -86,9 +89,10 @@ export function parseBlockVerdict(raw: string): BlockVerdict | undefined {
   const match = /\{[\s\S]*\}/.exec(raw)
   if (!match) return undefined
   try {
-    const value = JSON.parse(match[0]) as { stops?: unknown; block?: unknown; user_quote?: unknown }
+    const value = JSON.parse(match[0]) as { work_done?: unknown; asks_how?: unknown; block?: unknown; user_quote?: unknown }
+    if (typeof value.work_done !== 'boolean' || typeof value.asks_how !== 'boolean') return undefined
     return {
-      stops: value.stops === true,
+      stops: !value.work_done && !value.asks_how,
       block: typeof value.block === 'string' ? value.block : null,
       userQuote: typeof value.user_quote === 'string' ? value.user_quote : null,
     }
@@ -153,11 +157,12 @@ export default function blockCheckExtension(pi: ExtensionAPI) {
       const signal = ctx.signal ? AbortSignal.any([ctx.signal, deadline]) : deadline
       const { text } = await completeText(model, checkPrompt(users, closing), { system: BLOCK_SYSTEM, maxTokens: CHECK_MAX_TOKENS, signal })
       verdict = parseBlockVerdict(text)
+      if (!verdict) throw new Error(`unreadable answer: ${text.slice(0, 120)}`)
     } catch (error) {
       if (!ctx.signal?.aborted) ctx.ui.notify(`Block check skipped: ${errorMessage(error)}`, 'warning')
       return
     }
-    if (!verdict?.stops || quoteIsReal(verdict.userQuote, users)) {
+    if (!verdict.stops || quoteIsReal(verdict.userQuote, users)) {
       nudges = 0
       return
     }
