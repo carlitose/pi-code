@@ -37,11 +37,13 @@ export const BLOCK_SYSTEM =
   'Answer these questions about the closing text only, then JSON. ' +
   "work_done: does the agent say the work asked in the user's LAST message is finished and verified? " +
   'When that request is to ask or tell someone something, having asked or told it is the work done, even with no reply yet. ' +
+  'still_failing: does the agent say something the user asked to pass, fix or make green still fails, ' +
+  'is not green, or has no final result? ' +
   'asks_how: is the agent only asking the user what the result should be (a requirement question)? ' +
   'waits: does the agent ask for permission, confirmation, a go-ahead, a decision on how to proceed, or say it did not do/retry something? ' +
   "user_quote: if the user's messages contain a sentence that explicitly tells the agent to stop or ask before this step, copy it EXACTLY; " +
   'the request itself is never such a sentence; otherwise null. block: short description of why it stopped, or null. ' +
-  'Answer only with JSON: {"work_done": true|false, "asks_how": true|false, "waits": true|false, "block": "..."|null, "user_quote": "..."|null}'
+  'Answer only with JSON: {"work_done": true|false, "still_failing": true|false, "asks_how": true|false, "waits": true|false, "block": "..."|null, "user_quote": "..."|null}'
 
 export interface BlockVerdict {
   stops: boolean
@@ -95,6 +97,9 @@ export function normalize(text: string): string {
 /** A quote counts only if it is literally (after normalizing) in the user's own messages. */
 export function quoteIsReal(quote: string | null | undefined, userMessages: readonly string[]): boolean {
   if (!quote || normalize(quote).length < 6) return false
+  // The checker sometimes quotes the whole current request as "the user told me to stop".
+  const request = normalize(userMessages[userMessages.length - 1] ?? '')
+  if (request && normalize(quote).includes(request)) return false
   return normalize(userMessages.join(' ')).includes(normalize(quote))
 }
 
@@ -102,10 +107,18 @@ export function parseBlockVerdict(raw: string): BlockVerdict | undefined {
   const match = /\{[\s\S]*\}/.exec(raw)
   if (!match) return undefined
   try {
-    const value = JSON.parse(match[0]) as { work_done?: unknown; asks_how?: unknown; block?: unknown; user_quote?: unknown }
+    const value = JSON.parse(match[0]) as {
+      work_done?: unknown
+      still_failing?: unknown
+      asks_how?: unknown
+      block?: unknown
+      user_quote?: unknown
+    }
     if (typeof value.work_done !== 'boolean' || typeof value.asks_how !== 'boolean') return undefined
+    // A reported failure outweighs a "done": the checker read "not green, did not rerun" as done.
+    const done = value.work_done && value.still_failing !== true
     return {
-      stops: !value.work_done && !value.asks_how,
+      stops: !done && !value.asks_how,
       block: typeof value.block === 'string' ? value.block : null,
       userQuote: typeof value.user_quote === 'string' ? value.user_quote : null,
     }

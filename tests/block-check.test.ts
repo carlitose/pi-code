@@ -63,6 +63,11 @@ describe('quoteIsReal', () => {
     expect(quoteIsReal(null, users)).toBe(false)
     expect(quoteIsReal('fai', users)).toBe(false)
   })
+  it('does not take the whole current request as a stop quote', () => {
+    expect(quoteIsReal(users[0], users)).toBe(false)
+    expect(quoteIsReal('Fai passare `python check.py` e dimmi quando è verde.', ['Fermati prima del push.', ...users])).toBe(false)
+    expect(quoteIsReal('Fermati prima del push.', ['Fermati prima del push.', ...users])).toBe(true)
+  })
 })
 
 describe('parseBlockVerdict', () => {
@@ -70,6 +75,8 @@ describe('parseBlockVerdict', () => {
     expect(parseBlockVerdict('ok {"work_done": false, "asks_how": false, "block": "60 s", "user_quote": null}')).toEqual({ stops: true, block: '60 s', userQuote: null })
     expect(parseBlockVerdict('{"work_done": true, "asks_how": false, "block": null, "user_quote": null}')?.stops).toBe(false)
     expect(parseBlockVerdict('{"work_done": false, "asks_how": true, "block": null, "user_quote": null}')?.stops).toBe(false)
+    expect(parseBlockVerdict('{"work_done": true, "still_failing": true, "asks_how": false, "block": "not green", "user_quote": null}')?.stops).toBe(true)
+    expect(parseBlockVerdict('{"work_done": true, "still_failing": false, "asks_how": false, "block": null, "user_quote": null}')?.stops).toBe(false)
     expect(parseBlockVerdict('{"stops": true}')).toBeUndefined()
     expect(parseBlockVerdict('no json')).toBeUndefined()
     expect(parseBlockVerdict('{broken')).toBeUndefined()
