@@ -23,7 +23,9 @@ afterEach(() => {
   delete process.env.PI_BLOCK_CHECK
 })
 
-function setup(userTexts: string[] = ['Fai passare `python check.py` e dimmi quando è verde.']) {
+const loopEntry = (content: string, customType = 'loop') => ({ type: 'custom_message', id: 'l', parentId: null, timestamp: '', customType, content, display: true })
+
+function setup(userTexts: string[] = ['Fai passare `python check.py` e dimmi quando è verde.'], extra: unknown[] = []) {
   const handlers = new Map<string, Handler>()
   const sent: Array<{ message: { customType: string; content: string }; options: any }> = []
   const notes: string[] = []
@@ -35,7 +37,7 @@ function setup(userTexts: string[] = ['Fai passare `python check.py` e dimmi qua
     model: { id: 'session-model' },
     isIdle: () => true,
     ui: { notify: (msg: string) => notes.push(msg) },
-    sessionManager: { getBranch: () => userTexts.map(userEntry) },
+    sessionManager: { getBranch: () => [...userTexts.map(userEntry), ...extra] },
   }
   return {
     sent,
@@ -128,6 +130,17 @@ describe('block-check extension', () => {
     await s.end([assistant('fermo')])
     expect(s.sent).toHaveLength(0)
     expect(s.notes[0]).toContain('unreadable answer')
+  })
+
+  it("reads /loop rounds as the user's current request, and no other custom message", async () => {
+    verdict({ work_done: true, asks_how: false, block: null, user_quote: null })
+    const s = setup(['Correggi fixtures.py.'], [loopEntry('[loop, round 2] chiedi al main chi controllare'), loopEntry('Block check: ...', 'block-check')])
+    await s.end([assistant('Ho chiesto al Main in OUTBOX.md.')])
+    expect(s.sent).toHaveLength(0)
+    expect(prompts[0].prompt).toContain('the last one is the current request')
+    expect(prompts[0].prompt).toContain('Correggi fixtures.py.\n---\n[loop, round 2] chiedi al main chi controllare')
+    expect(prompts[0].prompt).not.toContain('Block check: ...')
+    expect(prompts[0].system).toContain("user's LAST message")
   })
 
   it('skips quietly on a checker failure and when turned off', async () => {

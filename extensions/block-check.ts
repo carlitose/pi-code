@@ -24,6 +24,8 @@ import { errorMessage } from './internal/values.js'
 
 export const MAX_NUDGES = 2
 export const BLOCK_MESSAGE = 'block-check'
+/** pi-loop's round messages, `[loop, round N] <instruction>`. */
+const LOOP_MESSAGE = 'loop'
 const CHECK_TIMEOUT_MS = 60_000
 const CHECK_MAX_TOKENS = 300
 const LAST_TEXT_CHARS = 6_000
@@ -32,7 +34,7 @@ const USER_TEXT_CHARS = 12_000
 export const BLOCK_SYSTEM =
   "You are a checker. You receive the user's messages and the text an agent closed its turn with. " +
   'Answer these questions about the closing text only, then JSON. ' +
-  'work_done: does the agent say the work the user asked for is finished and verified? ' +
+  "work_done: does the agent say the work asked in the user's LAST message is finished and verified? " +
   'asks_how: is the agent only asking the user what the result should be (a requirement question)? ' +
   'waits: does the agent ask for permission, confirmation, a go-ahead, a decision on how to proceed, or say it did not do/retry something? ' +
   "user_quote: if the user's messages contain a sentence that explicitly tells the agent to stop or ask before this step, copy it EXACTLY; " +
@@ -103,7 +105,7 @@ export function parseBlockVerdict(raw: string): BlockVerdict | undefined {
 
 export function checkPrompt(userMessages: readonly string[], closing: string): string {
   const users = userMessages.join('\n---\n')
-  return `USER'S MESSAGES:\n${users.slice(-USER_TEXT_CHARS)}\n\nTEXT THE AGENT CLOSES ITS TURN WITH:\n${closing.slice(-LAST_TEXT_CHARS)}`
+  return `USER'S MESSAGES (oldest first; the last one is the current request):\n${users.slice(-USER_TEXT_CHARS)}\n\nTEXT THE AGENT CLOSES ITS TURN WITH:\n${closing.slice(-LAST_TEXT_CHARS)}`
 }
 
 export function nudgeText(block: string | null): string {
@@ -131,6 +133,10 @@ function userMessages(ctx: Pick<ExtensionContext, 'sessionManager'>): string[] {
     if (entry.type === 'message' && (entry.message as TurnMessage).role === 'user') {
       const text = messageText(entry.message as TurnMessage)
       if (text) texts.push(text)
+    } else if (entry.type === 'custom_message' && entry.customType === LOOP_MESSAGE) {
+      // A `/loop` round repeats the user's own instruction: it is their current request.
+      const text = messageText(entry as unknown as TurnMessage)
+      if (text.startsWith('[loop, round')) texts.push(text)
     }
   }
   return texts
