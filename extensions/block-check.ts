@@ -27,6 +27,7 @@ export const BLOCK_MESSAGE = 'block-check'
 /** pi-loop's round messages, `[loop, round N] <instruction>`. */
 const LOOP_MESSAGE = 'loop'
 const CHECK_TIMEOUT_MS = 60_000
+const CHECK_ATTEMPTS = 2
 const CHECK_MAX_TOKENS = 300
 const LAST_TEXT_CHARS = 6_000
 const USER_TEXT_CHARS = 12_000
@@ -159,15 +160,22 @@ export default function blockCheckExtension(pi: ExtensionAPI) {
     if (!closing || !model) return
     const users = userMessages(ctx)
     let verdict: BlockVerdict | undefined
-    try {
-      const deadline = AbortSignal.timeout(CHECK_TIMEOUT_MS)
-      const signal = ctx.signal ? AbortSignal.any([ctx.signal, deadline]) : deadline
-      const { text } = await completeText(model, checkPrompt(users, closing), { system: BLOCK_SYSTEM, maxTokens: CHECK_MAX_TOKENS, signal })
-      verdict = parseBlockVerdict(text)
-      if (!verdict) throw new Error(`unreadable answer: ${text.slice(0, 120)}`)
-    } catch (error) {
-      if (!ctx.signal?.aborted) ctx.ui.notify(`Block check skipped: ${errorMessage(error)}`, 'warning')
-      return
+    // A transient provider error must not let a stop through unchecked: one retry.
+    for (let attempt = 1; !verdict; attempt++) {
+      try {
+        const deadline = AbortSignal.timeout(CHECK_TIMEOUT_MS)
+        const signal = ctx.signal ? AbortSignal.any([ctx.signal, deadline]) : deadline
+        const { text } = await completeText(model, checkPrompt(users, closing), { system: BLOCK_SYSTEM, maxTokens: CHECK_MAX_TOKENS, signal })
+        verdict = parseBlockVerdict(text)
+        if (!verdict) throw new Error(`unreadable answer: ${text.slice(0, 120)}`)
+      } catch (error) {
+        if (ctx.signal?.aborted) return
+        if (attempt < CHECK_ATTEMPTS) continue
+        const note = `Block check skipped: ${errorMessage(error)}`
+        ctx.ui.notify(note, 'warning')
+        if (!ctx.hasUI) process.stderr.write(`${note}\n`) // headless: notify shows nothing
+        return
+      }
     }
     if (!verdict.stops || quoteIsReal(verdict.userQuote, users)) {
       nudges = 0
