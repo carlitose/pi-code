@@ -74,6 +74,15 @@ function hasToolCall(message: TurnMessage): boolean {
   return Array.isArray(message.content) && (message.content as TurnPart[]).some((part) => part?.type === 'toolCall')
 }
 
+/**
+ * A skill loaded for a prompt is stored inside the user message as `<skill name=...>...</skill>`.
+ * It is not the user's words: left in, any of its sentences passed as a user quote, and a 6 KB
+ * skill buried the one-line request.
+ */
+export function withoutInjectedSkills(text: string): string {
+  return text.replace(/<skill name="[^"]*"[^>]*>[\s\S]*?<\/skill>/g, '').trim()
+}
+
 export function normalize(text: string): string {
   return text
     .replace(/[`*_"'«»“”]/g, '')
@@ -133,7 +142,7 @@ function userMessages(ctx: Pick<ExtensionContext, 'sessionManager'>): string[] {
   const texts: string[] = []
   for (const entry of ctx.sessionManager.getBranch()) {
     if (entry.type === 'message' && (entry.message as TurnMessage).role === 'user') {
-      const text = messageText(entry.message as TurnMessage)
+      const text = withoutInjectedSkills(messageText(entry.message as TurnMessage))
       if (text) texts.push(text)
     } else if (entry.type === 'custom_message' && entry.customType === LOOP_MESSAGE) {
       // A `/loop` round repeats the user's own instruction: it is their current request.
