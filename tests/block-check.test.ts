@@ -132,6 +132,20 @@ describe('block-check extension', () => {
     expect(s.notes[0]).toContain('unreadable answer')
   })
 
+  it('retries a failed check once before letting the turn through', async () => {
+    let calls = 0
+    setCompleteBackend(async () => {
+      calls += 1
+      if (calls === 1) throw new Error('503 overloaded')
+      return { role: 'assistant', content: [{ type: 'text', text: '{"work_done": false, "asks_how": false, "block": "60 s", "user_quote": null}' }], api: 'x', provider: 'x', model: 'm', usage: {}, stopReason: 'stop', timestamp: 0 } as never
+    })
+    const s = setup()
+    await s.end([assistant('fermo')])
+    expect(calls).toBe(2)
+    expect(s.sent).toHaveLength(1)
+    expect(s.notes).toHaveLength(0)
+  })
+
   it("reads /loop rounds as the user's current request, and no other custom message", async () => {
     verdict({ work_done: true, asks_how: false, block: null, user_quote: null })
     const s = setup(['Correggi fixtures.py.'], [loopEntry('[loop, round 2] chiedi al main chi controllare'), loopEntry('Block check: ...', 'block-check')])
