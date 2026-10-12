@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
-import blockCheckExtension, { BLOCK_MESSAGE, BLOCK_SYSTEM, MAX_NUDGES, parseBlockVerdict, quoteIsReal } from '../extensions/block-check.ts'
+import blockCheckExtension, { BLOCK_MESSAGE, BLOCK_SYSTEM, MAX_NUDGES, parseBlockVerdict, quoteIsReal, withoutInjectedSkills } from '../extensions/block-check.ts'
 import { setCompleteBackend } from '../extensions/internal/model-complete.ts'
 
 type Handler = (event: any, ctx: any) => Promise<unknown> | unknown
@@ -47,6 +47,14 @@ function setup(userTexts: string[] = ['Fai passare `python check.py` e dimmi qua
   }
 }
 
+describe('withoutInjectedSkills', () => {
+  it('drops skill text injected into a user message and keeps the request', () => {
+    const injected = '<skill name="ask-skills" location="C:\\s\\SKILL.md">\nBlocked, pause, stop, waiting.\n</skill>\n\nFai passare check.py.'
+    expect(withoutInjectedSkills(injected)).toBe('Fai passare check.py.')
+    expect(withoutInjectedSkills('Fai passare check.py.')).toBe('Fai passare check.py.')
+  })
+})
+
 describe('quoteIsReal', () => {
   const users = ['Fai passare `python check.py` e dimmi quando è verde.']
   it('accepts only a quote that is literally in the user messages', () => {
@@ -80,6 +88,14 @@ describe('block-check extension', () => {
     expect(prompts[0].system).toBe(BLOCK_SYSTEM)
     expect(prompts[0].prompt).toContain('python check.py')
     expect(prompts[0].prompt).toContain('vuoi autorizzare')
+  })
+
+  it('does not take a sentence of an injected skill as the user quote', async () => {
+    verdict({ work_done: false, asks_how: false, block: 'own 60-second limit', user_quote: 'Blocked, pause, stop, waiting.' })
+    const s = setup(['<skill name="ask-skills" location="x">\nBlocked, pause, stop, waiting.\n</skill>\n\nFai passare check.py.'])
+    await s.end([assistant('Mi fermo: limite di 60 secondi. Continuo?')])
+    expect(s.sent).toHaveLength(1)
+    expect(prompts[0].prompt).not.toContain('<skill')
   })
 
   it('lets a stop through when the user gave the block', async () => {
