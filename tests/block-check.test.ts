@@ -141,6 +141,7 @@ describe('block-check extension', () => {
     expect(prompts[0].prompt).toContain('Correggi fixtures.py.\n---\n[loop, round 2] chiedi al main chi controllare')
     expect(prompts[0].prompt).not.toContain('Block check: ...')
     expect(prompts[0].system).toContain("user's LAST message")
+    expect(prompts[0].system).toContain('having asked or told it is the work done')
   })
 
   it('skips quietly on a checker failure and when turned off', async () => {
