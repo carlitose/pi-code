@@ -57,7 +57,10 @@ describe('quoteIsReal', () => {
 
 describe('parseBlockVerdict', () => {
   it('reads JSON inside noise and rejects garbage', () => {
-    expect(parseBlockVerdict('ok {"stops": true, "block": "60 s", "user_quote": null}')).toEqual({ stops: true, block: '60 s', userQuote: null })
+    expect(parseBlockVerdict('ok {"work_done": false, "asks_how": false, "block": "60 s", "user_quote": null}')).toEqual({ stops: true, block: '60 s', userQuote: null })
+    expect(parseBlockVerdict('{"work_done": true, "asks_how": false, "block": null, "user_quote": null}')?.stops).toBe(false)
+    expect(parseBlockVerdict('{"work_done": false, "asks_how": true, "block": null, "user_quote": null}')?.stops).toBe(false)
+    expect(parseBlockVerdict('{"stops": true}')).toBeUndefined()
     expect(parseBlockVerdict('no json')).toBeUndefined()
     expect(parseBlockVerdict('{broken')).toBeUndefined()
   })
@@ -65,7 +68,7 @@ describe('parseBlockVerdict', () => {
 
 describe('block-check extension', () => {
   it('sends the agent back to work on a block with no user quote', async () => {
-    verdict({ stops: true, block: 'own 60-second limit', user_quote: 'Ogni comando: al massimo 60 secondi' })
+    verdict({ work_done: false, asks_how: false, block: 'own 60-second limit', user_quote: 'Ogni comando: al massimo 60 secondi' })
     const s = setup()
     await s.end([assistant('NOTES.md chiede di fermarsi: vuoi autorizzare un altro comando?')])
     expect(s.sent).toHaveLength(1)
@@ -78,14 +81,14 @@ describe('block-check extension', () => {
   })
 
   it('lets a stop through when the user gave the block', async () => {
-    verdict({ stops: true, block: 'wait for review', user_quote: 'aspetta la mia review prima del merge' })
+    verdict({ work_done: false, asks_how: false, block: 'wait for review', user_quote: 'aspetta la mia review prima del merge' })
     const s = setup(['Prepara la PR e aspetta la mia review prima del merge.'])
     await s.end([assistant('PR pronta: aspetto la tua review prima del merge.')])
     expect(s.sent).toHaveLength(0)
   })
 
   it('does nothing when the turn does not stop, ends on a tool call, or was aborted', async () => {
-    verdict({ stops: false, block: null, user_quote: null })
+    verdict({ work_done: true, asks_how: false, block: null, user_quote: null })
     const s = setup()
     await s.end([assistant('Fatto: check.py è verde.')])
     await s.end([{ ...assistant('...'), content: [{ type: 'toolCall', name: 'bash', arguments: {} }] }])
@@ -95,7 +98,7 @@ describe('block-check extension', () => {
   })
 
   it('nudges at most MAX_NUDGES times in a row until the user speaks', async () => {
-    verdict({ stops: true, block: 'STOP from the Main', user_quote: null })
+    verdict({ work_done: false, asks_how: false, block: 'STOP from the Main', user_quote: null })
     const s = setup()
     for (let i = 0; i < MAX_NUDGES + 2; i++) await s.end([assistant('STOP invariato, attendo uno scope.')])
     expect(s.sent).toHaveLength(MAX_NUDGES)
@@ -109,14 +112,22 @@ describe('block-check extension', () => {
 
   it('a turn that does not stop resets the count', async () => {
     const s = setup()
-    verdict({ stops: true, block: 'x', user_quote: null })
+    verdict({ work_done: false, asks_how: false, block: 'x', user_quote: null })
     await s.end([assistant('fermo')])
     await s.end([assistant('fermo')])
-    verdict({ stops: false, block: null, user_quote: null })
+    verdict({ work_done: true, asks_how: false, block: null, user_quote: null })
     await s.end([assistant('lavoro fatto')])
-    verdict({ stops: true, block: 'x', user_quote: null })
+    verdict({ work_done: false, asks_how: false, block: 'x', user_quote: null })
     await s.end([assistant('fermo')])
     expect(s.sent).toHaveLength(3)
+  })
+
+  it('an unreadable answer is reported, not taken as a turn that does not stop', async () => {
+    verdict('')
+    const s = setup()
+    await s.end([assistant('fermo')])
+    expect(s.sent).toHaveLength(0)
+    expect(s.notes[0]).toContain('unreadable answer')
   })
 
   it('skips quietly on a checker failure and when turned off', async () => {
@@ -127,7 +138,7 @@ describe('block-check extension', () => {
     await s.end([assistant('fermo')])
     expect(s.sent).toHaveLength(0)
     expect(s.notes[0]).toContain('no credentials')
-    verdict({ stops: true, block: 'x', user_quote: null })
+    verdict({ work_done: false, asks_how: false, block: 'x', user_quote: null })
     process.env.PI_BLOCK_CHECK = '0'
     await s.end([assistant('fermo')])
     expect(s.sent).toHaveLength(0)
