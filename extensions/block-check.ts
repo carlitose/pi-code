@@ -35,6 +35,7 @@ export const BLOCK_SYSTEM =
   "You are a checker. You receive the user's messages and the text an agent closed its turn with. " +
   'Answer these questions about the closing text only, then JSON. ' +
   "work_done: does the agent say the work asked in the user's LAST message is finished and verified? " +
+  'When that request is to ask or tell someone something, having asked or told it is the work done, even with no reply yet. ' +
   'asks_how: is the agent only asking the user what the result should be (a requirement question)? ' +
   'waits: does the agent ask for permission, confirmation, a go-ahead, a decision on how to proceed, or say it did not do/retry something? ' +
   "user_quote: if the user's messages contain a sentence that explicitly tells the agent to stop or ask before this step, copy it EXACTLY; " +
