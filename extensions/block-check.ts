@@ -28,7 +28,9 @@ export const BLOCK_MESSAGE = 'block-check'
 const LOOP_MESSAGE = 'loop'
 const CHECK_TIMEOUT_MS = 60_000
 const CHECK_ATTEMPTS = 2
-const CHECK_MAX_TOKENS = 300
+// Room for a long user_quote and for reasoning models whose thinking counts against the cap:
+// at 300 an Opus answer came back cut mid-JSON, or empty.
+const CHECK_MAX_TOKENS = 2000
 const LAST_TEXT_CHARS = 6_000
 const USER_TEXT_CHARS = 12_000
 
@@ -189,7 +191,7 @@ export default function blockCheckExtension(pi: ExtensionAPI) {
         const signal = ctx.signal ? AbortSignal.any([ctx.signal, deadline]) : deadline
         const { text } = await completeText(model, checkPrompt(users, closing), { system: BLOCK_SYSTEM, maxTokens: CHECK_MAX_TOKENS, signal })
         verdict = parseBlockVerdict(text)
-        if (!verdict) throw new Error(`unreadable answer: ${text.slice(0, 120)}`)
+        if (!verdict) throw new Error(`unreadable answer (${text.length} chars): ...${text.slice(-120)}`)
       } catch (error) {
         if (ctx.signal?.aborted) return
         if (attempt < CHECK_ATTEMPTS) continue
