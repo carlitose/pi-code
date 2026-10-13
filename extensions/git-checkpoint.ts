@@ -22,6 +22,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { type ExtensionAPI, type ExtensionCommandContext, type ExtensionContext, getAgentDir } from '@earendil-works/pi-coding-agent'
+import { onIdeEdits } from './internal/ide-edits.ts'
 import { readUserSetting } from './internal/settings-chain.ts'
 import { fileToolTarget } from './internal/tool-target.ts'
 import { contentText, errorMessage } from './internal/values.ts'
@@ -604,14 +605,24 @@ export default function gitCheckpointExtension(pi: ExtensionAPI) {
   // A checkpoint covers the files the session edited, so the tracked set grows as the
   // model works. The baseline is taken here, before the tool writes, because once the
   // tool has run the pre-edit content is gone.
+  async function track(named: string): Promise<void> {
+    const file = throughSymlinks(named)
+    if (touched.has(file)) return
+    touched.add(file)
+    await captureBaseline(file)
+  }
+
   pi.on('tool_call', async (event, ctx) => {
     if (!EDIT_TOOLS.has(event.toolName)) return
     const target = fileToolTarget(event)
     if (target === undefined) return
-    const file = throughSymlinks(path.resolve(ctx.cwd, target))
-    if (touched.has(file)) return
-    touched.add(file)
-    await captureBaseline(file)
+    await track(path.resolve(ctx.cwd, target))
+  })
+
+  // pi-agent-ide's replace/insert/delete/move/copy name no file a tool_call can read;
+  // the plan it resolves before writing does.
+  onIdeEdits(pi, 'git-checkpoint', async (files) => {
+    for (const file of files) await track(file)
   })
 
   pi.on('turn_end', (_event, ctx) => {

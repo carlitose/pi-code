@@ -4,7 +4,7 @@ Read-only exploration mode for safe code analysis.
 
 ## Features
 
-- **Read-only tools**: Restricts available tools to read, bash, grep, find, ls, question, and `plan_mode_complete`
+- **Read-only tools**: Restricts available tools to read, bash, grep, find, ls, question, and `plan_mode_complete`, plus pi-agent-ide's read-only `search` and `diff` when that package is installed
 - **Bash allowlist**: Only read-only bash commands are allowed
 - **Plan extraction**: Takes the plan from the `plan_mode_complete` tool call, falling back to numbered steps under a `Plan:` header when the model writes prose instead
 - **Progress tracking**: Widget shows completion status during execution

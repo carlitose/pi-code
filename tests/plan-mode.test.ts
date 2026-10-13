@@ -141,6 +141,15 @@ describe('plan mode toggle', () => {
     expect(s.notices[0]).toContain('Plan mode enabled')
   })
 
+  it("keeps pi-agent-ide's read-only search and diff, and blocks its editing tools", async () => {
+    const s = setup({ activeTools: ['read', 'bash', 'search', 'diff', 'replace', 'insert', 'write'] })
+    await s.runCommand('plan')
+    expect(s.getActiveTools()).toEqual(['read', 'bash', 'search', 'diff'])
+    expect(await s.emit('tool_call', { toolName: 'search', input: { query: 'loadConfig' } })).toBeUndefined()
+    expect(await s.emit('tool_call', { toolName: 'diff', input: { before: 'a.ts', after: 'b.ts' } })).toBeUndefined()
+    expect(await s.emit('tool_call', { toolName: 'replace', input: { path: 'a.ts', text: '' } })).toMatchObject({ block: true })
+  })
+
   it('only enables tools the session already had', async () => {
     const s = setup({ activeTools: ['read', 'edit'] })
     await s.runCommand('plan')
