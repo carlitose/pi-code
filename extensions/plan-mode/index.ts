@@ -21,8 +21,9 @@ import { Type } from 'typebox'
 import { PLAN_MODE_CHANNEL } from '../internal/plan-mode-state.js'
 import { extractTodoItems, isSafeCommand, markCompletedSteps, planToTodos, restoredPlanState, type TodoItem } from './utils.js'
 
-// Tools
-const PLAN_MODE_TOOLS = ['read', 'bash', 'grep', 'find', 'ls', 'question', 'plan_mode_complete']
+// Tools. `search` and `diff` are pi-agent-ide's read-only search and compare, which
+// stand in for grep/find when that package replaces pi's file tools.
+const PLAN_MODE_TOOLS = ['read', 'bash', 'grep', 'find', 'ls', 'search', 'diff', 'question', 'plan_mode_complete']
 
 /** Agent runs in execution mode with no [DONE:n] progress before execution ends on
  * its own. Kept small: each stalled run re-injects the stale plan into the turn. */
