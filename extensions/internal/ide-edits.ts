@@ -25,14 +25,8 @@ type Host = Pick<ExtensionAPI, 'on'> & { events?: ExtensionAPI['events'] }
 
 /** The part of the text-editor core's plugin API this module uses. */
 type EditorApi = {
-  addMutationGuard(registration: {
-    id: string
-    guard(plan: { resources?: ReadonlyArray<{ source?: unknown }> }): Promise<{ kind: 'accepted' }>
-  }): void
-  addDeleteGuard?(registration: {
-    id: string
-    guard(event: { path?: unknown; kind?: unknown }): Promise<{ decision: 'allow' }>
-  }): void
+  addMutationGuard(registration: { id: string; guard(plan: { resources?: ReadonlyArray<{ source?: unknown }> }): Promise<{ kind: 'accepted' }> }): void
+  addDeleteGuard?(registration: { id: string; guard(event: { path?: unknown; kind?: unknown }): Promise<{ decision: 'allow' }> }): void
 }
 
 /** A local file a plan names, or undefined for a remote (SSH) or other non-file resource. */
@@ -90,14 +84,19 @@ export function onIdeEdits(pi: Host, id: string, listener: (files: string[]) => 
       },
       accept(registration: Promise<void>) {
         accepted = true
-        void Promise.resolve(registration).then(() => { connected = true }, () => {})
+        void Promise.resolve(registration).then(
+          () => {
+            connected = true
+          },
+          () => {},
+        )
       },
     })
     return accepted
   }
   if (announce(KNOWN_TEXT_EDITOR_API_VERSION)) return () => connected
   const unsubscribe = events.on(TEXT_EDITOR_READY_EVENT, (ready) => {
-    const version = (ready as { protocol?: unknown; apiVersion?: unknown } | undefined)
+    const version = ready as { protocol?: unknown; apiVersion?: unknown } | undefined
     if (version?.protocol !== PROTOCOL || typeof version.apiVersion !== 'number') return
     if (announce(version.apiVersion)) unsubscribe()
   })

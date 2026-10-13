@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import gitCheckpoint from '../extensions/git-checkpoint.ts'
-import { KNOWN_TEXT_EDITOR_API_VERSION, TEXT_EDITOR_READY_EVENT, TEXT_EDITOR_REGISTER_EVENT, onIdeEdits } from '../extensions/internal/ide-edits.ts'
+import { KNOWN_TEXT_EDITOR_API_VERSION, onIdeEdits, TEXT_EDITOR_READY_EVENT, TEXT_EDITOR_REGISTER_EVENT } from '../extensions/internal/ide-edits.ts'
 
 type Handler = (event: any, ctx: any) => Promise<unknown>
 
@@ -32,7 +32,11 @@ function bus() {
   const events = {
     on(channel: string, handler: (data: unknown) => void) {
       listeners.set(channel, [...(listeners.get(channel) ?? []), handler])
-      return () => listeners.set(channel, (listeners.get(channel) ?? []).filter((h) => h !== handler))
+      return () =>
+        listeners.set(
+          channel,
+          (listeners.get(channel) ?? []).filter((h) => h !== handler),
+        )
     },
     emit(channel: string, data: unknown) {
       for (const handler of listeners.get(channel) ?? []) handler(data)
@@ -86,8 +90,7 @@ function setup(events: ReturnType<typeof bus>['events']) {
   const fire = async (name: string, event: any, c = ctx([], [], [])) => {
     for (const fn of handlers.get(name) ?? []) await fn(event, c)
   }
-  const rewind = () => commands.get('rewind')?.handler('', ctx(appended, [userEntry], [
-    `1. ${new Date(appended[0].data.createdAt).toLocaleTimeString()}  ${appended[0].data.prompt}`, 'Code only']))
+  const rewind = () => commands.get('rewind')?.handler('', ctx(appended, [userEntry], [`1. ${new Date(appended[0].data.createdAt).toLocaleTimeString()}  ${appended[0].data.prompt}`, 'Code only']))
   const run = async (edit: () => Promise<void>) => {
     await fire('session_start', { reason: 'startup' })
     await fire('agent_start', {})
@@ -102,7 +105,7 @@ describe('checkpoints of pi-agent-ide edits', () => {
   it('restores a file changed by an IDE mutation tool (core loaded after pi-code)', async () => {
     const b = bus()
     const t = setup(b.events)
-    b.startCore(KNOWN_TEXT_EDITOR_API_VERSION + 1)  // a newer core: the version comes from its readiness event
+    b.startCore(KNOWN_TEXT_EDITOR_API_VERSION + 1) // a newer core: the version comes from its readiness event
     expect(b.guards.edit).toHaveLength(1)
     const file = join(t.repo, 'loader.ts')
     writeFileSync(file, 'before\n')
@@ -110,7 +113,7 @@ describe('checkpoints of pi-agent-ide edits', () => {
     await t.run(async () => {
       const verdict = await b.guards.edit[0].guard({ resources: [{ source: file }] }, { cwd: t.repo })
       expect(verdict).toEqual({ kind: 'accepted' })
-      writeFileSync(file, 'after\n')  // `replace` writes only after every guard accepted
+      writeFileSync(file, 'after\n') // `replace` writes only after every guard accepted
     })
     await t.rewind()
     expect(readFileSync(file, 'utf8')).toBe('before\n')
