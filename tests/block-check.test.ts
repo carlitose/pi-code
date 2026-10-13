@@ -153,6 +153,7 @@ describe('block-check extension', () => {
     await s.end([assistant('fermo')])
     expect(s.sent).toHaveLength(0)
     expect(s.notes[0]).toContain('unreadable answer')
+    expect(s.notes[0]).toMatch(/unreadable answer \(\d+ chars\): \.\.\./)
   })
 
   it('retries a failed check once before letting the turn through', async () => {
