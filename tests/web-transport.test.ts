@@ -113,3 +113,23 @@ describe('httpFetch pins the connection to the validated address', () => {
     expect(response.headers.get('x-probe')).toBe('one value')
   })
 })
+
+describe('httpFetch errors always carry a message', () => {
+  it('names the host and each reason when every address of the host refuses', async () => {
+    // Two addresses make Node try each (happy eyeballs) and fail with an AggregateError
+    // whose own message is empty; nothing listens on port 9.
+    const twoAddresses = ((_hostname: string, options: unknown, callback: (err: Error | null, address: unknown, family?: number) => void) => {
+      const cb = (typeof options === 'function' ? options : callback) as (e: Error | null, a: unknown, f?: number) => void
+      cb(null, [
+        { address: '127.0.0.1', family: 4 },
+        { address: '::1', family: 6 },
+      ])
+    }) as unknown as LookupFunction
+
+    const failure = await httpFetch(new URL('http://multi.test:9/'), { signal: signal(), lookup: twoAddresses, userAgent: 'x' }).catch((e: Error) => e)
+
+    expect(failure).toBeInstanceOf(Error)
+    expect((failure as Error).message).toMatch(/^could not reach multi\.test: .*ECONNREFUSED/)
+    expect((failure as Error).cause).toBeInstanceOf(AggregateError)
+  })
+})
