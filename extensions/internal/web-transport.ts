@@ -67,7 +67,19 @@ export function httpFetch(url: URL, opts: TransportOptions): Promise<Response> {
         }
       },
     )
-    req.on('error', reject)
+    req.on('error', (err) => reject(withMessage(err, url)))
     req.end()
   })
+}
+
+/** Node's happy-eyeballs connect, tried on every address a host resolves to, fails with an
+ * AggregateError whose message is empty: the reasons are in `errors`. A tool error with no
+ * text reaches the model as nothing, and Anthropic's API rejects an empty error result with
+ * HTTP 400 on every later request of the session. Name the host and every reason. */
+function withMessage(err: unknown, url: URL): unknown {
+  if (!(err instanceof Error) || err.message.trim() !== '') return err
+  const reasons = err instanceof AggregateError ? err.errors.map((e) => (e instanceof Error ? e.message : String(e))).filter(Boolean) : []
+  const code = (err as { code?: unknown }).code
+  const detail = reasons.length > 0 ? reasons.join('; ') : typeof code === 'string' ? code : err.name
+  return new Error(`could not reach ${url.hostname}: ${detail}`, { cause: err })
 }
