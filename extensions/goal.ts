@@ -71,14 +71,19 @@ import { errorMessage } from './internal/values.ts'
  * transcript lines (kickoff, verdicts, check-ins) carry. */
 const GOAL_ENTRY = 'goal'
 const GOAL_MESSAGE = 'goal'
-/** Claude's prompt-hook default; a slow evaluator is an error, not a stall. */
-const EVALUATOR_TIMEOUT_MS = 30_000
+/** Claude's prompt-hook default is 30 s, but a session model reading a long transcript
+ * routinely took longer: every evaluation was aborted ("Request was aborted") and the goal
+ * stalled. Two minutes leaves room for a capped transcript on a large model. */
+const EVALUATOR_TIMEOUT_MS = 120_000
 /** A verdict is one JSON object; the cap stops a runaway reply. */
 const EVALUATOR_MAX_TOKENS = 512
 /** Claude trims the transcript to half the evaluator's context window. */
 const TRANSCRIPT_WINDOW_SHARE = 0.5
 const CHARS_PER_TOKEN = 4
 const DEFAULT_CONTEXT_WINDOW = 200_000
+/** Half of a 1M window is 500k tokens: far too slow for a yes/no verdict. The newest
+ * 50k tokens carry what the verdict needs. */
+const MAX_TRANSCRIPT_TOKENS = 50_000
 /** The `◎ goal <elapsed>` indicator re-renders on this cadence while a goal is active. */
 const INDICATOR_REFRESH_MS = 60_000
 
@@ -183,7 +188,8 @@ function evaluatorModel(ctx: ExtensionContext): ExtensionContext['model'] {
 }
 
 function transcriptBudget(model: { contextWindow?: number }): number {
-  return Math.floor((model.contextWindow || DEFAULT_CONTEXT_WINDOW) * TRANSCRIPT_WINDOW_SHARE * CHARS_PER_TOKEN)
+  const tokens = Math.min((model.contextWindow || DEFAULT_CONTEXT_WINDOW) * TRANSCRIPT_WINDOW_SHARE, MAX_TRANSCRIPT_TOKENS)
+  return Math.floor(tokens * CHARS_PER_TOKEN)
 }
 
 export default function goalExtension(pi: ExtensionAPI) {

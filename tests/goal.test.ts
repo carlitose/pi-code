@@ -324,6 +324,19 @@ describe('goal evaluation', () => {
     expect(calls[0].prompt).toContain('[earlier transcript omitted]')
   })
 
+  it('caps the transcript at 50k tokens however large the evaluator window is', async () => {
+    // A 1M window would allow 2M chars; the cap keeps the newest 200k chars only. Each
+    // message is cut to 6000 chars, so 60 recent messages (~300k) push the oldest one out.
+    const recent = Array.from({ length: 60 }, (_, i) => messageEntry(assistant(`RECENT ${i} ${'y'.repeat(5000)}`)))
+    const t = setup({ model: { id: 'huge', contextWindow: 1_000_000 }, branch: [messageEntry({ role: 'user', content: 'ANCIENT request' }), ...recent] })
+    await t.goal('done')
+    notMet('not yet')
+    await t.agentEnd()
+    expect(calls[0].prompt).toContain('RECENT')
+    expect(calls[0].prompt).not.toContain('ANCIENT')
+    expect(calls[0].prompt.length).toBeLessThan(260_000)
+  })
+
   it('continues the conversation on a not-met verdict, feeding the reason and the condition back', async () => {
     const t = setup()
     await t.goal('lint is clean')
