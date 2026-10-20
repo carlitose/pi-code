@@ -325,8 +325,10 @@ describe('goal evaluation', () => {
   })
 
   it('caps the transcript at 50k tokens however large the evaluator window is', async () => {
-    // A 1M window would allow 2M chars; the cap keeps the newest 200k chars only.
-    const t = setup({ model: { id: 'huge', contextWindow: 1_000_000 }, branch: [messageEntry({ role: 'user', content: `ANCIENT ${'z'.repeat(150_000)}` }), messageEntry(assistant(`RECENT ${'y'.repeat(150_000)}`))] })
+    // A 1M window would allow 2M chars; the cap keeps the newest 200k chars only. Each
+    // message is cut to 6000 chars, so 60 recent messages (~300k) push the oldest one out.
+    const recent = Array.from({ length: 60 }, (_, i) => messageEntry(assistant(`RECENT ${i} ${'y'.repeat(5000)}`)))
+    const t = setup({ model: { id: 'huge', contextWindow: 1_000_000 }, branch: [messageEntry({ role: 'user', content: 'ANCIENT request' }), ...recent] })
     await t.goal('done')
     notMet('not yet')
     await t.agentEnd()
