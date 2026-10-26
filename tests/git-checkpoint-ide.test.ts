@@ -140,7 +140,7 @@ describe('checkpoints of pi-agent-ide edits', () => {
     const b = bus()
     b.startCore(KNOWN_TEXT_EDITOR_API_VERSION)
     const seen: string[][] = []
-    const connected = onIdeEdits({ events: b.events, on: () => {} }, 'probe', (files) => {
+    const connected = onIdeEdits({ events: b.events, on: () => () => {} }, 'probe', (files) => {
       seen.push(files)
       throw new Error('checkpoint store unavailable')
     })
@@ -153,6 +153,6 @@ describe('checkpoints of pi-agent-ide edits', () => {
   })
 
   it('stays off without pi-agent-ide', () => {
-    expect(onIdeEdits({ on: () => {} }, 'probe', () => {})()).toBe(false)
+    expect(onIdeEdits({ on: () => () => {} }, 'probe', () => {})()).toBe(false)
   })
 })

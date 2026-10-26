@@ -13,6 +13,7 @@ const setup = () => {
   todoExtension({
     on: (name: string, fn: Handler) => handlers.set(name, fn),
     registerCommand: () => {},
+    appendEntry: () => {},
     registerTool: (tool: { name: string; execute: Execute }) => {
       if (tool.name === 'todo') execute = tool.execute
     },
